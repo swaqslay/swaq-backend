@@ -36,11 +36,11 @@ if not _db_url.startswith("postgresql"):
 else:
     logger.info(f"DATABASE DETECTED: PostgreSQL (Supabase) Host: {_db_url.split('@')[-1] if '@' in _db_url else _db_url}")
 
-# Database engine configuration
 engine_kwargs = {
     "echo": (not settings.is_production),
     "pool_pre_ping": True,
     "pool_recycle": 1800,
+    "prepared_statement_cache_size": 0,  # Correct location for SQLAlchemy asyncpg
 }
 
 # Vercel has short-lived functions. Pooling is better disabled to avoid "resource busy" errors.
@@ -60,7 +60,7 @@ if "postgresql" in _db_url:
     ssl_context.verify_mode = ssl.CERT_NONE
     
     engine_kwargs["connect_args"] = {
-        "prepared_statement_cache_size": 0,
+        "statement_cache_size": 0,  # Direct asyncpg argument
         "ssl": ssl_context
     }
 
