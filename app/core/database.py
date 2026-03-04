@@ -44,11 +44,19 @@ engine_kwargs = {
     "pool_recycle": 1800,
 }
 
+# Vercel has short-lived functions. Pooling is better disabled to avoid "resource busy" errors.
+if "VERCEL" in os.environ:
+    from sqlalchemy.pool import NullPool
+    engine_kwargs["poolclass"] = NullPool
+    logger.info("Vercel detected: Using NullPool for serverless environment.")
+else:
+    logger.info("Standard environment: Using persistent connection pool.")
+
 # Supabase Pooler (Transaction Mode) requires disabling prepared statements
 if "postgresql" in _db_url:
     engine_kwargs["connect_args"] = {
         "prepared_statement_cache_size": 0,
-        "ssl": "require"  # Better compatibility for local dev + Supabase
+        "ssl": "require"
     }
 
 engine = create_async_engine(_db_url, **engine_kwargs)
