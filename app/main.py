@@ -42,9 +42,17 @@ async def lifespan(app: FastAPI):
     logger.info(f"Redis        : {'✓ configured' if settings.redis_url else '✗ not set (caching disabled)'}")
     logger.info(f"R2 Storage   : {'✓ configured' if settings.cloudflare_r2_endpoint else '✗ not set (images not stored)'}")
 
-    await init_db()
-    await init_redis()
-    logger.info("Startup complete.")
+    try:
+        await init_db()
+    except Exception as exc:
+        logger.error(f"Failed to initialize database: {exc}")
+    
+    try:
+        await init_redis()
+    except Exception as exc:
+        logger.error(f"Failed to initialize Redis: {exc}")
+    
+    logger.info("Startup sequence complete.")
 
     yield  # Application is running
 
