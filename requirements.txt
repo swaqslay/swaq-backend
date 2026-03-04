@@ -1,0 +1,33 @@
+# Core Framework
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20
+
+# AI & ML
+google-genai==1.14.0
+openai==1.82.0              # OpenRouter uses OpenAI-compatible API
+httpx==0.28.1
+Pillow==11.1.0
+
+# Database
+sqlalchemy==2.0.37
+asyncpg==0.30.0
+alembic==1.14.1
+
+# Cache
+redis==5.2.1
+
+# Auth & Security
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+pydantic[email]==2.10.5
+pydantic-settings==2.7.1
+
+# Utils
+python-dotenv==1.0.1
+aiofiles==24.1.0
+boto3==1.36.0               # For R2/S3 image storage
+
+# Testing
+pytest==8.3.4
+pytest-asyncio==0.25.0

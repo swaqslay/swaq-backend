@@ -1,0 +1,67 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "swaq-backend"
+version = "0.1.0"
+description = "Swaq AI — Food Photo Nutrition Tracker Backend"
+requires-python = ">=3.10"
+dependencies = [
+    # Web framework
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.34.0",
+    # Database
+    "sqlalchemy>=2.0.0",
+    "alembic>=1.14.0",
+    "asyncpg>=0.30.0",          # PostgreSQL async driver
+    "aiosqlite>=0.20.0",        # SQLite async driver (local dev)
+    # Validation
+    "pydantic>=2.10.0",
+    "pydantic-settings>=2.7.0",
+    "email-validator>=2.2.0",   # For EmailStr validation
+    # Auth
+    "python-jose[cryptography]>=3.3.0",  # JWT
+    "passlib[bcrypt]>=1.7.4",            # Password hashing
+    # AI
+    "openai>=1.60.0",           # OpenRouter (OpenAI-compatible)
+    "httpx>=0.28.0",            # Async HTTP (Gemini REST, USDA)
+    # Image processing
+    "Pillow>=11.0.0",           # EXIF strip + resize
+    # Redis
+    "redis[asyncio]>=5.2.0",
+    # Storage
+    "boto3>=1.35.0",            # Cloudflare R2 (S3-compatible)
+    # Multipart uploads
+    "python-multipart>=0.0.20",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.25.0",
+    "pytest-cov>=6.0.0",
+    "httpx>=0.28.0",            # AsyncClient for tests
+    "ruff>=0.9.0",
+    "aiosqlite>=0.20.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app"]
