@@ -146,7 +146,11 @@ async def swaq_error_handler(request: Request, exc: SwaqError) -> JSONResponse:
 async def unhandled_error_handler(request: Request, exc: Exception) -> JSONResponse:
     """Catch-all for unexpected server errors."""
     import logging
+    import traceback
+    
+    tb = traceback.format_exc()
     logging.getLogger(__name__).exception("Unhandled error: %s", exc)
+    
     return JSONResponse(
         status_code=500,
         content={
@@ -154,8 +158,8 @@ async def unhandled_error_handler(request: Request, exc: Exception) -> JSONRespo
             "data": None,
             "error": {
                 "code": "INTERNAL_ERROR",
-                "message": "An unexpected error occurred. Please try again.",
-                "details": None,
+                "message": str(exc),
+                "details": {"traceback": tb}
             },
         },
     )
