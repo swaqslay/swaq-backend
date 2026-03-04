@@ -24,17 +24,17 @@ import os
 
 _db_url = _build_db_url(settings.database_url)
 
-# ── Vercel Workaround ────────────────────────────────────────────────────────
+# ── Database Connection Verification ──────────────────────────────────────────
 # Log the environment for debugging
 if "VERCEL" in os.environ:
     logger.info("ENVIRONMENT: Vercel serverless (Production)")
-    # Vercel has a read-only filesystem. SQLite is for LOCAL ONLY.
-    if _db_url.startswith("sqlite"):
-         logger.warning(f"DATABASE DETECTED: SQLite (Caution: Read-only filesystem!) URL: {_db_url}")
-    else:
-        logger.info(f"DATABASE DETECTED: PostgreSQL (Supabase) Host: {_db_url.split('@')[-1] if '@' in _db_url else _db_url}")
 else:
-    logger.info(f"ENVIRONMENT: Standard system. DB: {_db_url.split('@')[-1] if '@' in _db_url else _db_url}")
+    logger.info("ENVIRONMENT: Standard system")
+
+if not _db_url.startswith("postgresql"):
+    logger.error(f"INVALID DATABASE TYPE: Only PostgreSQL/Supabase is supported. URL: {_db_url.split('://')[0]}://...")
+else:
+    logger.info(f"DATABASE DETECTED: PostgreSQL (Supabase) Host: {_db_url.split('@')[-1] if '@' in _db_url else _db_url}")
 
 # Database engine configuration
 engine_kwargs = {
@@ -89,17 +89,10 @@ async def get_db() -> AsyncSession:
 
 async def init_db() -> None:
     """
-    Initialize database tables. 
-    Only runs create_all for SQLite.
-    For Postgres, use Alembic: `alembic upgrade head`.
+    Initialize database connection.
+    Table creation is handled by Alembic migrations.
     """
-    # Import models here so their metadata is registered on Base before create_all
-    from app.models import user, meal, nutrition_cache  # noqa: F401
-
-    # Only run create_all for SQLite (local dev without Alembic)
-    if _db_url.startswith("sqlite"):
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-        logger.info("SQLite tables initialized.")
-    else:
-        logger.info("PostgreSQL detected: Skipping automatic table creation (use Alembic).")
+    # Simply verify connection
+    async with engine.connect() as conn:
+        await conn.execute(__import__("sqlalchemy").text("SELECT 1"))
+    logger.info("Database connection verified.")

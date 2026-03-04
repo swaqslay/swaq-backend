@@ -46,7 +46,7 @@ class Settings(BaseSettings):
     usda_api_key: str = ""
 
     # ── Database ──────────────────────────────────────────────────────────────
-    database_url: str = "sqlite+aiosqlite:///./swaq.db"
+    database_url: str = "postgresql+asyncpg://postgres:password@localhost:5432/postgres"
     supabase_url: str = ""
     supabase_anon_key: str = ""
 
