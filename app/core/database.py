@@ -23,7 +23,16 @@ def _build_db_url(url: str) -> str:
     return url
 
 
+import os
+
 _db_url = _build_db_url(settings.database_url)
+
+# ── Vercel Workaround ────────────────────────────────────────────────────────
+# Vercel has a read-only filesystem EXCEPT for /tmp.
+# If we are on Vercel and using SQLite, redirect the DB file to /tmp.
+if "VERCEL" in os.environ and _db_url.startswith("sqlite"):
+    _db_url = "sqlite+aiosqlite:////tmp/swaq.db"
+    logger.info(f"Vercel detected: Redirecting SQLite to {_db_url}")
 
 engine = create_async_engine(
     _db_url,
