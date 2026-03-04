@@ -15,11 +15,8 @@ settings = get_settings()
 
 def _build_db_url(url: str) -> str:
     """Ensure async driver prefix is used."""
-    if url.startswith("postgresql://"):
-        return url.replace("postgresql://", "postgresql+asyncpg://", 1)
-    if url.startswith("postgres://"):
-        # Common Heroku/Railway format
-        return url.replace("postgres://", "postgresql+asyncpg://", 1)
+    if url.startswith("postgresql://") or url.startswith("postgres://"):
+        return url.replace("postgresql://", "postgresql+asyncpg://", 1).replace("postgres://", "postgresql+asyncpg://", 1)
     return url
 
 
@@ -30,20 +27,31 @@ _db_url = _build_db_url(settings.database_url)
 # ── Vercel Workaround ────────────────────────────────────────────────────────
 # Vercel has a read-only filesystem. SQLite is for LOCAL ONLY.
 # In production (Vercel), we MUST use a real database (Supabase/Postgres).
+# Log the database location (redacting credentials)
+_display_url = _db_url.split("@")[-1] if "@" in _db_url else _db_url
+logger.info(f"Database: {_display_url}")
+
 if "VERCEL" in os.environ:
     if _db_url.startswith("sqlite"):
-        # If user didn't provide a DATABASE_URL for Supabase, this will fail
-        # but it's better than a silent 500 on write.
         logger.error("Vercel detected but DATABASE_URL is still SQLite. Supabase is REQUIRED for production.")
     else:
-        logger.info("Vercel detected: Using production database (Supabase/Postgres).")
+        logger.info("Vercel detected: Production mode active.")
 
-engine = create_async_engine(
-    _db_url,
-    echo=(not settings.is_production),
-    pool_pre_ping=True,   # Detect stale connections
-    pool_recycle=1800,    # Recycle connections every 30 min
-)
+# Database engine configuration
+engine_kwargs = {
+    "echo": (not settings.is_production),
+    "pool_pre_ping": True,
+    "pool_recycle": 1800,
+}
+
+# Supabase Pooler (Transaction Mode) requires disabling prepared statements
+if "postgresql" in _db_url:
+    engine_kwargs["connect_args"] = {
+        "prepared_statement_cache_size": 0,
+        "ssl": "require"  # Better compatibility for local dev + Supabase
+    }
+
+engine = create_async_engine(_db_url, **engine_kwargs)
 
 async_session = async_sessionmaker(
     engine,
@@ -73,13 +81,17 @@ async def get_db() -> AsyncSession:
 
 async def init_db() -> None:
     """
-    Create all tables from metadata.
-    Only used for local dev / SQLite.
-    In production, use Alembic migrations: `alembic upgrade head`.
+    Initialize database tables. 
+    Only runs create_all for SQLite.
+    For Postgres, use Alembic: `alembic upgrade head`.
     """
     # Import models here so their metadata is registered on Base before create_all
     from app.models import user, meal, nutrition_cache  # noqa: F401
 
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    logger.info("Database tables initialized.")
+    # Only run create_all for SQLite (local dev without Alembic)
+    if _db_url.startswith("sqlite"):
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        logger.info("SQLite tables initialized.")
+    else:
+        logger.info("PostgreSQL detected: Skipping automatic table creation (use Alembic).")

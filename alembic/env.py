@@ -8,7 +8,10 @@ import os
 from logging.config import fileConfig
 
 from alembic import context
+from dotenv import load_dotenv
 from sqlalchemy import pool
+
+load_dotenv()
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
@@ -27,7 +30,8 @@ if db_url:
         db_url = db_url.replace("postgresql://", "postgresql+asyncpg://", 1)
     elif db_url.startswith("postgres://"):
         db_url = db_url.replace("postgres://", "postgresql+asyncpg://", 1)
-    config.set_main_option("sqlalchemy.url", db_url)
+    # Escape % for configparser interpolation
+    config.set_main_option("sqlalchemy.url", db_url.replace("%", "%%"))
 
 # Interpret the config file for Python logging
 if config.config_file_name is not None:
@@ -69,7 +73,12 @@ async def run_async_migrations() -> None:
 
 def run_migrations_online() -> None:
     """Entry point for online migration mode."""
-    asyncio.run(run_async_migrations())
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_until_complete(run_async_migrations())
+    finally:
+        loop.close()
 
 
 if context.is_offline_mode():
