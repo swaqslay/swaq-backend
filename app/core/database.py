@@ -25,17 +25,16 @@ import os
 _db_url = _build_db_url(settings.database_url)
 
 # ── Vercel Workaround ────────────────────────────────────────────────────────
-# Vercel has a read-only filesystem. SQLite is for LOCAL ONLY.
-# In production (Vercel), we MUST use a real database (Supabase/Postgres).
-# Log the database location (redacting credentials)
-_display_url = _db_url.split("@")[-1] if "@" in _db_url else _db_url
-logger.info(f"Database: {_display_url}")
-
+# Log the environment for debugging
 if "VERCEL" in os.environ:
+    logger.info("ENVIRONMENT: Vercel serverless (Production)")
+    # Vercel has a read-only filesystem. SQLite is for LOCAL ONLY.
     if _db_url.startswith("sqlite"):
-        logger.error("Vercel detected but DATABASE_URL is still SQLite. Supabase is REQUIRED for production.")
+         logger.warning(f"DATABASE DETECTED: SQLite (Caution: Read-only filesystem!) URL: {_db_url}")
     else:
-        logger.info("Vercel detected: Production mode active.")
+        logger.info(f"DATABASE DETECTED: PostgreSQL (Supabase) Host: {_db_url.split('@')[-1] if '@' in _db_url else _db_url}")
+else:
+    logger.info(f"ENVIRONMENT: Standard system. DB: {_db_url.split('@')[-1] if '@' in _db_url else _db_url}")
 
 # Database engine configuration
 engine_kwargs = {
@@ -52,11 +51,12 @@ if "VERCEL" in os.environ:
 else:
     logger.info("Standard environment: Using persistent connection pool.")
 
-# Supabase Pooler (Transaction Mode) requires disabling prepared statements
+# Supabase Pooler (Transaction Mode) requires disabling prepared statements.
+# Using ssl=True is standard for asyncpg to require SSL.
 if "postgresql" in _db_url:
     engine_kwargs["connect_args"] = {
         "prepared_statement_cache_size": 0,
-        "ssl": "require"
+        "ssl": True
     }
 
 engine = create_async_engine(_db_url, **engine_kwargs)
