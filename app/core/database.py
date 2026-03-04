@@ -28,15 +28,19 @@ import os
 _db_url = _build_db_url(settings.database_url)
 
 # ── Vercel Workaround ────────────────────────────────────────────────────────
-# Vercel has a read-only filesystem EXCEPT for /tmp.
-# If we are on Vercel and using SQLite, redirect the DB file to /tmp.
-if "VERCEL" in os.environ and _db_url.startswith("sqlite"):
-    _db_url = "sqlite+aiosqlite:////tmp/swaq.db"
-    logger.info(f"Vercel detected: Redirecting SQLite to {_db_url}")
+# Vercel has a read-only filesystem. SQLite is for LOCAL ONLY.
+# In production (Vercel), we MUST use a real database (Supabase/Postgres).
+if "VERCEL" in os.environ:
+    if _db_url.startswith("sqlite"):
+        # If user didn't provide a DATABASE_URL for Supabase, this will fail
+        # but it's better than a silent 500 on write.
+        logger.error("Vercel detected but DATABASE_URL is still SQLite. Supabase is REQUIRED for production.")
+    else:
+        logger.info("Vercel detected: Using production database (Supabase/Postgres).")
 
 engine = create_async_engine(
     _db_url,
-    echo=(settings.app_env == "development"),
+    echo=(not settings.is_production),
     pool_pre_ping=True,   # Detect stale connections
     pool_recycle=1800,    # Recycle connections every 30 min
 )

@@ -20,6 +20,15 @@ class Settings(BaseSettings):
     app_env: str = "development"
     cors_origins: str = "http://localhost:3000,http://localhost:8080"
 
+    # ── Vercel Overrides ──────────────────────────────────────────────────────
+    @property
+    def effective_app_env(self) -> str:
+        """Force production mode on Vercel."""
+        import os
+        if "VERCEL" in os.environ:
+            return "production"
+        return self.app_env
+
     # ── Auth / JWT ────────────────────────────────────────────────────────────
     secret_key: str = "change-this-in-production-use-openssl-rand-hex-32"
     jwt_algorithm: str = "HS256"
@@ -64,7 +73,7 @@ class Settings(BaseSettings):
 
     @property
     def is_production(self) -> bool:
-        return self.app_env == "production"
+        return self.effective_app_env == "production"
 
 
 @lru_cache()
