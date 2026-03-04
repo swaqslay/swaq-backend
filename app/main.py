@@ -92,12 +92,16 @@ async def add_security_headers(request: Request, call_next):
 
 
 # ── CORS ──────────────────────────────────────────────────────────────────────
+# Handle '*' origin with credentials restriction (FastAPI requirement)
+cors_origins = settings.cors_origin_list
+allow_all = "*" in cors_origins
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origin_list,
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type"],
+    allow_origins=["*"] if allow_all else cors_origins,
+    allow_credentials=not allow_all,  # can't use * with credentials
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
