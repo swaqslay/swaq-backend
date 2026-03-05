@@ -24,7 +24,7 @@ dependencies = [
     # Auth
     "python-jose[cryptography]>=3.3.0",  # JWT
     "passlib[bcrypt]>=1.7.4",            # Password hashing
-    "bcrypt==3.2.3",                     # Pin version for passlib compatibility
+    "bcrypt==4.0.1",                     # Pin version for passlib compatibility
     # AI
     "openai>=1.60.0",           # OpenRouter (OpenAI-compatible)
     "httpx>=0.28.0",            # Async HTTP (Gemini REST, USDA)
