@@ -12,6 +12,7 @@ Pillow==11.1.0
 # Database
 sqlalchemy==2.0.37
 asyncpg==0.30.0
+psycopg[binary]==3.2.4    # Async PG driver for Vercel (asyncpg incompatible with uvloop sandbox)
 alembic==1.14.1
 
 # Cache
