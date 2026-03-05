@@ -1,11 +1,11 @@
 """Tests for AI food recognizer — mocking external API calls."""
 
+from unittest.mock import AsyncMock, patch
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 
-from app.services.ai_food_recognizer import AIFoodRecognizer
 from app.core.exceptions import ServiceUnavailableError
-
+from app.services.ai_food_recognizer import AIFoodRecognizer
 
 MOCK_RECOGNITION_RESULT = {
     "food_items": [
@@ -97,3 +97,31 @@ def test_parse_json_invalid():
 def test_parse_json_empty():
     result = AIFoodRecognizer._parse_json_response("")
     assert result is None
+
+
+def test_parse_json_truncated_array():
+    """Truncated JSON with missing closing ] and } should be recovered."""
+    truncated = '{"food_items": [{"name": "rice", "calories": 200}, {"name": "dal", "calories": 150}'
+    # Missing: ]}
+    result = AIFoodRecognizer._parse_json_response(truncated)
+    assert result is not None
+    assert len(result["food_items"]) == 2
+    assert result["food_items"][0]["name"] == "rice"
+    assert result["food_items"][1]["name"] == "dal"
+
+
+def test_parse_json_truncated_mid_value_no_exception():
+    """Truncated mid-string — function must not raise; result is None or partial dict."""
+    truncated = '{"food_items": [{"name": "chic'
+    result = AIFoodRecognizer._parse_json_response(truncated)
+    # Function must not raise — return value may be None or partial dict
+    assert result is None or "food_items" in result
+
+
+def test_parse_json_truncated_with_markdown():
+    """Truncated JSON inside markdown fences should still attempt recovery."""
+    truncated = '```json\n{"food_items": [{"name": "paneer", "calories": 300}'
+    # Missing: ]} and closing ```
+    result = AIFoodRecognizer._parse_json_response(truncated)
+    assert result is not None
+    assert result["food_items"][0]["name"] == "paneer"
