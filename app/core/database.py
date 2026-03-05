@@ -90,6 +90,10 @@ if "postgresql" in _db_url:
         # psycopg3 connect args
         connect_args: dict = {
             "prepare_threshold": 0,  # Required for Supabase transaction-mode pooler
+            # SSL is required: Supabase's pooler (Supavisor) uses SSL SNI to route
+            # connections to the correct project tenant. Without SSL, auth fails.
+            # psycopg handles SSL via Python's ssl module (not uvloop), so this works.
+            "sslmode": "require",
         }
 
         # Pre-resolve DNS synchronously to bypass uvloop's broken async getaddrinfo.
