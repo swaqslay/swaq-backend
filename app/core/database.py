@@ -51,17 +51,24 @@ else:
     logger.info("Standard environment: Using persistent connection pool.")
 
 # Supabase Pooler (Transaction Mode) requires disabling prepared statements.
-# Using a relaxed SSL context to avoid certificate verification errors on some systems.
 if "postgresql" in _db_url:
-    import ssl
-    ssl_context = ssl.create_default_context()
-    ssl_context.check_hostname = False
-    ssl_context.verify_mode = ssl.CERT_NONE
-    
-    engine_kwargs["connect_args"] = {
-        "statement_cache_size": 0,  # Direct asyncpg argument
-        "ssl": ssl_context
+    connect_args = {
+        "statement_cache_size": 0,  # Required for Supabase transaction-mode pooler
     }
+
+    # Vercel's sandboxed runtime cannot create full SSLContext objects (causes
+    # "Device or resource busy"). Use the simple string form instead, which
+    # asyncpg handles natively without problematic system calls.
+    if "VERCEL" in os.environ:
+        connect_args["ssl"] = "require"
+    else:
+        import ssl
+        ssl_context = ssl.create_default_context()
+        ssl_context.check_hostname = False
+        ssl_context.verify_mode = ssl.CERT_NONE
+        connect_args["ssl"] = ssl_context
+
+    engine_kwargs["connect_args"] = connect_args
 
 engine = create_async_engine(_db_url, **engine_kwargs)
 
