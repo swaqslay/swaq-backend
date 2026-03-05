@@ -2,7 +2,11 @@
 Pydantic schemas for authentication endpoints.
 """
 
+import uuid
+
 from pydantic import BaseModel, EmailStr, Field
+
+from app.schemas.user import ProfileResponse
 
 
 class UserRegister(BaseModel):
@@ -38,10 +42,22 @@ class RefreshRequest(BaseModel):
 class UserPublic(BaseModel):
     """Safe user representation (no password hash)."""
 
-    id: str
+    id: uuid.UUID
     email: str
     name: str
     is_premium: bool
 
     class Config:
         from_attributes = True
+
+
+class AuthResponse(BaseModel):
+    """Enriched auth response with tokens + user + profile."""
+
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+    expires_in: int = 900
+    user: UserPublic
+    profile: ProfileResponse | None = None
+    profile_required: bool = False
