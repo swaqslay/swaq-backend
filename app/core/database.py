@@ -1,12 +1,17 @@
 """
 Async SQLAlchemy engine, session factory, and Base for all ORM models.
 
-On Vercel: uses psycopg (psycopg3) driver — compatible with uvloop sandbox.
-Elsewhere: uses asyncpg — faster, but incompatible with Vercel's restricted runtime.
+On Vercel: uses psycopg (psycopg3) driver with pre-resolved DNS.
+  Vercel's Lambda sandbox blocks async DNS resolution (uvloop getaddrinfo
+  returns EBUSY). We resolve the hostname synchronously at import time
+  and pass the IP via psycopg's `hostaddr` parameter to skip async DNS.
+Elsewhere: uses asyncpg — faster, no sandbox restrictions.
 """
 
 import logging
 import os
+import socket
+from urllib.parse import urlparse
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
@@ -19,6 +24,19 @@ settings = get_settings()
 _IS_VERCEL = "VERCEL" in os.environ
 
 
+def _resolve_host(hostname: str, port: int) -> str | None:
+    """Synchronously resolve hostname to IP. Returns None on failure."""
+    try:
+        results = socket.getaddrinfo(hostname, port, socket.AF_UNSPEC, socket.SOCK_STREAM)
+        if results:
+            ip = results[0][4][0]
+            logger.info(f"DNS pre-resolved: {hostname} -> {ip}")
+            return ip
+    except Exception as exc:
+        logger.warning(f"DNS pre-resolve failed for {hostname}: {exc}")
+    return None
+
+
 def _build_db_url(url: str) -> str:
     """Convert a database URL to the correct async driver prefix."""
     if not (url.startswith("postgresql://") or url.startswith("postgres://")):
@@ -28,10 +46,8 @@ def _build_db_url(url: str) -> str:
     url = url.replace("postgres://", "postgresql://", 1)
 
     if _IS_VERCEL:
-        # psycopg3 async driver — works on Vercel
         return url.replace("postgresql://", "postgresql+psycopg://", 1)
     else:
-        # asyncpg — faster, used locally and on standard hosts
         return url.replace("postgresql://", "postgresql+asyncpg://", 1)
 
 
@@ -59,13 +75,11 @@ engine_kwargs: dict = {
 }
 
 if _IS_VERCEL:
-    # Serverless: no persistent pool, each invocation creates/destroys connections
     from sqlalchemy.pool import NullPool
 
     engine_kwargs["poolclass"] = NullPool
     logger.info("Vercel detected: Using NullPool + psycopg driver.")
 else:
-    # Standard: persistent pool with health checks
     engine_kwargs["pool_pre_ping"] = True
     engine_kwargs["pool_recycle"] = 1800
     logger.info("Standard environment: Using persistent connection pool.")
@@ -74,10 +88,23 @@ else:
 if "postgresql" in _db_url:
     if _IS_VERCEL:
         # psycopg3 connect args
-        # Supabase pooler (transaction mode) doesn't support prepared statements
-        engine_kwargs["connect_args"] = {
-            "prepare_threshold": 0,
+        connect_args: dict = {
+            "prepare_threshold": 0,  # Required for Supabase transaction-mode pooler
         }
+
+        # Pre-resolve DNS synchronously to bypass uvloop's broken async getaddrinfo.
+        # psycopg's `hostaddr` parameter tells it to skip DNS and connect to the IP
+        # directly, while still using the hostname for SSL SNI.
+        parsed = urlparse(_db_url)
+        if parsed.hostname:
+            resolved_ip = _resolve_host(parsed.hostname, parsed.port or 5432)
+            if resolved_ip:
+                connect_args["hostaddr"] = resolved_ip
+                logger.info(f"Will connect via pre-resolved IP: {resolved_ip}")
+            else:
+                logger.warning("Could not pre-resolve DB host; async DNS will be attempted.")
+
+        engine_kwargs["connect_args"] = connect_args
     else:
         # asyncpg connect args
         import ssl
