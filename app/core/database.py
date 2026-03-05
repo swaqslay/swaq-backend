@@ -44,6 +44,7 @@ class Base(DeclarativeBase):
 
 if _IS_VERCEL:
     from sqlalchemy.pool import NullPool
+    from psycopg import ClientCursor
 
     _sync_url = _normalize_url(settings.database_url).replace(
         "postgresql://", "postgresql+psycopg://", 1
@@ -57,7 +58,7 @@ if _IS_VERCEL:
         echo=False,
         poolclass=NullPool,
         connect_args={
-            "prepare_threshold": 0,  # Supabase transaction-mode pooler
+            "cursor_factory": ClientCursor,
             "sslmode": "require",
         },
     )
