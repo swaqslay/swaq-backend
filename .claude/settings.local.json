@@ -1,7 +1,41 @@
 {
   "permissions": {
     "allow": [
-      "Bash(xargs grep -l \"networkSecurityConfig\\\\|cleartext\\\\|domain\")"
+      "Read .handoff/**",
+      "Read .noindex/**",
+      "Read .agent/**",
+      "Read app/**",
+      "Read tests/**",
+      "Read alembic/**",
+      "Read scripts/**",
+      "Read CLAUDE.md",
+      "Read requirements.txt",
+      "Read pyproject.toml",
+      "Read .env.example",
+      "Write .handoff/**",
+      "Write .noindex/**",
+      "Edit .handoff/**",
+      "Edit .noindex/**",
+      "Bash(ls *)",
+      "Bash(find *)",
+      "Bash(git status *)",
+      "Bash(git diff *)",
+      "Bash(git log *)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(ruff *)",
+      "Bash(python -m pytest *)",
+      "Bash(python -m ruff *)",
+      "Bash(alembic *)",
+      "Bash(pip *)",
+      "Bash(python -m pip *)",
+      "Bash(cat *)",
+      "Bash(mkdir *)"
+    ],
+    "deny": [
+      "Bash(git push *)",
+      "Bash(rm -rf *)",
+      "Bash(git reset --hard *)"
     ]
   }
 }
