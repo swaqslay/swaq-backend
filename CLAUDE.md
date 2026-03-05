@@ -421,18 +421,19 @@ GEMINI_CONFIG = {
 OPENROUTER_CONFIG = {
     "api_base": "https://openrouter.ai/api/v1",
     "vision_models": [
-        "qwen/qwen3-vl-30b-a3b:free",          # Best free vision model
-        "google/gemma-3-27b-it:free",            # Google's open model
-        "nvidia/nemotron-nano-2-vl:free",        # NVIDIA vision
+        "google/gemini-2.5-flash:free",          # Best free vision model (latest Gemini)
+        "google/gemini-2.0-flash-001:free",      # Gemini 2.0 via OpenRouter
+        "openai/gpt-4o-mini:free",               # Reliable multimodal fallback
         "openrouter/free",                        # Auto-select any available free model
     ],
     "text_models": [
-        "qwen/qwen3-235b-a22b:free",            # Best free text model
-        "google/gemma-3-27b-it:free",
+        "google/gemini-2.5-flash:free",          # Best free text model
+        "deepseek/deepseek-v3.2-20251201:free",  # Strong reasoning
+        "openai/gpt-4o-mini:free",               # Reliable fallback
         "openrouter/free",
     ],
     "temperature": 0.15,
-    "max_tokens": 4096,
+    "max_tokens": 8192,
 }
 ```
 

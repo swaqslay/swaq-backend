@@ -13,11 +13,10 @@ import base64
 import json
 import logging
 from io import BytesIO
-from typing import Optional
 
 import httpx
 from openai import AsyncOpenAI
-from PIL import Image, ImageOps
+from PIL import Image
 
 from app.core.config import get_settings
 from app.core.exceptions import ai_all_providers_failed
@@ -72,15 +71,16 @@ class AIFoodRecognizer:
 
     # OpenRouter free vision models (tried in order)
     OPENROUTER_VISION_MODELS = [
-        "google/gemini-2.0-pro-exp-02-05:free",
-        "meta-llama/llama-3.2-90b-vision-instruct:free",
-        "openrouter/free", 
+        "google/gemini-2.5-flash:free",
+        "google/gemini-2.0-flash-001:free",
+        "openai/gpt-4o-mini:free",
+        "openrouter/free",
     ]
 
     OPENROUTER_TEXT_MODELS = [
-        "nvidia/nemotron-3-nano-30b-a3b:free",
-        "meta-llama/llama-3.3-70b-instruct:free",
-        "qwen/qwen-2.5-72b-instruct:free",
+        "google/gemini-2.5-flash:free",
+        "deepseek/deepseek-v3.2-20251201:free",
+        "openai/gpt-4o-mini:free",
         "openrouter/free",
     ]
 
@@ -159,7 +159,7 @@ class AIFoodRecognizer:
 
     # ── Gemini implementations ────────────────────────────────────────────────
 
-    async def _analyze_with_gemini(self, image_bytes: bytes, mime_type: str) -> Optional[dict]:
+    async def _analyze_with_gemini(self, image_bytes: bytes, mime_type: str) -> dict | None:
         """Call Gemini Flash vision API via REST."""
         if not self.gemini_api_key:
             logger.debug("GEMINI_API_KEY not set, skipping Gemini")
@@ -194,7 +194,7 @@ class AIFoodRecognizer:
         text = data["candidates"][0]["content"]["parts"][0]["text"]
         return self._parse_json_response(text)
 
-    async def _text_query_gemini(self, prompt: str) -> Optional[dict]:
+    async def _text_query_gemini(self, prompt: str) -> dict | None:
         """Text-only Gemini call for nutrition estimation."""
         if not self.gemini_api_key:
             return None
@@ -207,7 +207,7 @@ class AIFoodRecognizer:
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {
                 "temperature": 0.15,
-                "maxOutputTokens": 4096,
+                "maxOutputTokens": 8192,
                 "responseMimeType": "application/json",
             },
         }
@@ -222,7 +222,7 @@ class AIFoodRecognizer:
 
     # ── OpenRouter implementations ────────────────────────────────────────────
 
-    async def _analyze_with_openrouter(self, image_bytes: bytes, mime_type: str) -> Optional[dict]:
+    async def _analyze_with_openrouter(self, image_bytes: bytes, mime_type: str) -> dict | None:
         """Try each OpenRouter free vision model until one succeeds."""
         if not settings.openrouter_api_key:
             logger.debug("OPENROUTER_API_KEY not set, skipping OpenRouter")
@@ -236,7 +236,7 @@ class AIFoodRecognizer:
                 "role": "user",
                 "content": [
                     {
-                        "type": "text", 
+                        "type": "text",
                         "text": FOOD_RECOGNITION_SYSTEM_PROMPT + "\n\n" + FOOD_RECOGNITION_USER_PROMPT
                     },
                     {"type": "image_url", "image_url": {"url": image_data_url}},
@@ -267,7 +267,7 @@ class AIFoodRecognizer:
 
         return None
 
-    async def _text_query_openrouter(self, prompt: str) -> Optional[dict]:
+    async def _text_query_openrouter(self, prompt: str) -> dict | None:
         """Text-only OpenRouter call for nutrition estimation."""
         if not settings.openrouter_api_key:
             return None
@@ -282,7 +282,7 @@ class AIFoodRecognizer:
                         model=model,
                         messages=[{"role": "user", "content": prompt}],
                         temperature=0.15,
-                        max_tokens=4096,
+                        max_tokens=8192,
                     )
                     text = response.choices[0].message.content
                     result = self._parse_json_response(text)
@@ -296,10 +296,11 @@ class AIFoodRecognizer:
     # ── Helpers ───────────────────────────────────────────────────────────────
 
     @staticmethod
-    def _parse_json_response(text: str) -> Optional[dict]:
+    def _parse_json_response(text: str) -> dict | None:
         """
         Safely parse JSON from AI response.
         Strips markdown code fences (```json ... ```) if present.
+        Attempts to recover truncated JSON by closing unclosed brackets.
         """
         if not text:
             return None
@@ -313,8 +314,96 @@ class AIFoodRecognizer:
             cleaned = cleaned[:-3]
         cleaned = cleaned.strip()
 
+        # 1. Try direct parse
         try:
             return json.loads(cleaned)
-        except json.JSONDecodeError as exc:
-            logger.error(f"AI JSON parse failed: {exc} | Raw (500 chars): {text[:500]}")
-            return None
+        except json.JSONDecodeError:
+            pass
+
+        # 2. Attempt truncated JSON recovery
+        #    Count unclosed brackets and append closers
+        open_braces = 0
+        open_brackets = 0
+        in_string = False
+        escape_next = False
+
+        for char in cleaned:
+            if escape_next:
+                escape_next = False
+                continue
+            if char == "\\":
+                if in_string:
+                    escape_next = True
+                continue
+            if char == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if char == "{":
+                open_braces += 1
+            elif char == "}":
+                open_braces -= 1
+            elif char == "[":
+                open_brackets += 1
+            elif char == "]":
+                open_brackets -= 1
+
+        if open_braces > 0 or open_brackets > 0:
+            # Strip trailing incomplete value (e.g., truncated mid-string or mid-number)
+            # Find last complete JSON element delimiter
+            repaired = cleaned.rstrip()
+            # Remove trailing partial tokens: partial strings, numbers, etc.
+            while repaired and repaired[-1] not in "{}[],\"0123456789":
+                repaired = repaired[:-1]
+            # If ends mid-string, remove back to the opening quote of that string
+            # and the key before it (best-effort)
+            if repaired and repaired[-1] == '"':
+                # Likely a truncated string value or key — remove it
+                repaired = repaired[:-1]
+                last_quote = repaired.rfind('"')
+                if last_quote >= 0:
+                    repaired = repaired[:last_quote]
+            # Strip trailing comma or colon (incomplete key-value)
+            repaired = repaired.rstrip(", \t\n:")
+
+            # Append closers in reverse order of what's open
+            # Re-count after stripping
+            open_braces = 0
+            open_brackets = 0
+            in_string = False
+            escape_next = False
+            for char in repaired:
+                if escape_next:
+                    escape_next = False
+                    continue
+                if char == "\\":
+                    if in_string:
+                        escape_next = True
+                    continue
+                if char == '"':
+                    in_string = not in_string
+                    continue
+                if in_string:
+                    continue
+                if char == "{":
+                    open_braces += 1
+                elif char == "}":
+                    open_braces -= 1
+                elif char == "[":
+                    open_brackets += 1
+                elif char == "]":
+                    open_brackets -= 1
+
+            repaired += "]" * open_brackets + "}" * open_braces
+
+            try:
+                result = json.loads(repaired)
+                logger.warning("Recovered truncated AI JSON response")
+                return result
+            except json.JSONDecodeError:
+                pass
+
+        # 3. Unrecoverable
+        logger.error(f"AI JSON parse failed | Raw (500 chars): {text[:500]}")
+        return None
