@@ -72,24 +72,20 @@ class AIFoodRecognizer:
 
     # OpenRouter free vision models (tried in order)
     OPENROUTER_VISION_MODELS = [
-        "qwen/qwen3-vl-30b-a3b:free",      # Best free vision model
-        "google/gemma-3-27b-it:free",        # Google's open model
-        "nvidia/nemotron-nano-2-vl:free",    # NVIDIA vision
-        "openrouter/free",                    # Auto-select best available free
+        "google/gemini-2.0-pro-exp-02-05:free",
+        "meta-llama/llama-3.2-90b-vision-instruct:free",
+        "openrouter/free", 
     ]
 
     OPENROUTER_TEXT_MODELS = [
-        "qwen/qwen3-235b-a22b:free",        # Best free text model
-        "google/gemma-3-27b-it:free",
+        "nvidia/nemotron-3-nano-30b-a3b:free",
+        "meta-llama/llama-3.3-70b-instruct:free",
+        "qwen/qwen-2.5-72b-instruct:free",
         "openrouter/free",
     ]
 
     def __init__(self):
         self.gemini_api_key = settings.gemini_api_key
-        self.openrouter_client = AsyncOpenAI(
-            base_url="https://openrouter.ai/api/v1",
-            api_key=settings.openrouter_api_key or "placeholder",
-        )
 
     async def analyze_food_image(self, image_bytes: bytes, mime_type: str = "image/jpeg") -> dict:
         """
@@ -236,32 +232,38 @@ class AIFoodRecognizer:
         image_data_url = f"data:{mime_type};base64,{b64_image}"
 
         messages = [
-            {"role": "system", "content": FOOD_RECOGNITION_SYSTEM_PROMPT},
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": FOOD_RECOGNITION_USER_PROMPT},
+                    {
+                        "type": "text", 
+                        "text": FOOD_RECOGNITION_SYSTEM_PROMPT + "\n\n" + FOOD_RECOGNITION_USER_PROMPT
+                    },
                     {"type": "image_url", "image_url": {"url": image_data_url}},
                 ],
             },
         ]
 
-        for model in self.OPENROUTER_VISION_MODELS:
-            try:
-                response = await self.openrouter_client.chat.completions.create(
-                    model=model,
-                    messages=messages,
-                    temperature=0.15,
-                    max_tokens=2048,
-                )
-                text = response.choices[0].message.content
-                result = self._parse_json_response(text)
-                if result:
-                    result["_ai_provider"] = "openrouter"
-                    result["_ai_model"] = model
-                    return result
-            except Exception as exc:
-                logger.warning(f"OpenRouter vision model '{model}' failed: {exc}")
+        async with AsyncOpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=settings.openrouter_api_key,
+        ) as client:
+            for model in self.OPENROUTER_VISION_MODELS:
+                try:
+                    response = await client.chat.completions.create(
+                        model=model,
+                        messages=messages,
+                        temperature=0.15,
+                        max_tokens=2048,
+                    )
+                    text = response.choices[0].message.content
+                    result = self._parse_json_response(text)
+                    if result:
+                        result["_ai_provider"] = "openrouter"
+                        result["_ai_model"] = model
+                        return result
+                except Exception as exc:
+                    logger.warning(f"OpenRouter vision model '{model}' failed: {exc}")
 
         return None
 
@@ -270,20 +272,24 @@ class AIFoodRecognizer:
         if not settings.openrouter_api_key:
             return None
 
-        for model in self.OPENROUTER_TEXT_MODELS:
-            try:
-                response = await self.openrouter_client.chat.completions.create(
-                    model=model,
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=0.15,
-                    max_tokens=4096,
-                )
-                text = response.choices[0].message.content
-                result = self._parse_json_response(text)
-                if result:
-                    return result
-            except Exception as exc:
-                logger.warning(f"OpenRouter text model '{model}' failed: {exc}")
+        async with AsyncOpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=settings.openrouter_api_key,
+        ) as client:
+            for model in self.OPENROUTER_TEXT_MODELS:
+                try:
+                    response = await client.chat.completions.create(
+                        model=model,
+                        messages=[{"role": "user", "content": prompt}],
+                        temperature=0.15,
+                        max_tokens=4096,
+                    )
+                    text = response.choices[0].message.content
+                    result = self._parse_json_response(text)
+                    if result:
+                        return result
+                except Exception as exc:
+                    logger.warning(f"OpenRouter text model '{model}' failed: {exc}")
 
         return None
 
