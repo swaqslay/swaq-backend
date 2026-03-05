@@ -3,6 +3,7 @@ Async SQLAlchemy engine, session factory, and Base for all ORM models.
 """
 
 import logging
+import os
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
@@ -14,13 +15,16 @@ settings = get_settings()
 
 
 def _build_db_url(url: str) -> str:
-    """Ensure async driver prefix is used."""
+    """Ensure async driver prefix is used and strip sslmode for Vercel."""
     if url.startswith("postgresql://") or url.startswith("postgres://"):
-        return url.replace("postgresql://", "postgresql+asyncpg://", 1).replace("postgres://", "postgresql+asyncpg://", 1)
+        url = url.replace("postgresql://", "postgresql+asyncpg://", 1).replace(
+            "postgres://", "postgresql+asyncpg://", 1
+        )
+    # On Vercel, strip sslmode from URL so our connect_args ssl=False takes effect
+    if "VERCEL" in os.environ:
+        import re
+        url = re.sub(r"[?&]sslmode=[^&]*", "", url)
     return url
-
-
-import os
 
 _db_url = _build_db_url(settings.database_url)
 
@@ -56,11 +60,12 @@ if "postgresql" in _db_url:
         "statement_cache_size": 0,  # Required for Supabase transaction-mode pooler
     }
 
-    # Vercel's sandboxed runtime cannot create full SSLContext objects (causes
-    # "Device or resource busy"). Use the simple string form instead, which
-    # asyncpg handles natively without problematic system calls.
+    # Vercel's sandboxed runtime blocks SSL-related system calls entirely
+    # (causes "Device or resource busy"). Disable SSL on the asyncpg side —
+    # Supabase's pooler accepts non-SSL connections and handles SSL to the
+    # actual database internally.
     if "VERCEL" in os.environ:
-        connect_args["ssl"] = "require"
+        connect_args["ssl"] = False
     else:
         import ssl
         ssl_context = ssl.create_default_context()
