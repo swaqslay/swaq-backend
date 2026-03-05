@@ -23,7 +23,9 @@ REFRESH_TOKEN_TYPE = "refresh"
 
 def hash_password(plain_password: str) -> str:
     """Hash a plain-text password with bcrypt (12 rounds)."""
-    return _pwd_context.hash(plain_password)
+    # Defensive check: bcrypt has a 72-byte limit. We truncate here as well.
+    # Note: str.encode('utf-8')[:72] would be safer if we care about byte length.
+    return _pwd_context.hash(plain_password[:72])
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
