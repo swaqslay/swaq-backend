@@ -3,7 +3,6 @@ Pydantic schemas for meal-related endpoints.
 """
 
 from datetime import datetime
-from typing import Optional
 
 from pydantic import BaseModel, Field
 
@@ -15,7 +14,7 @@ class MealScanResponse(BaseModel):
 
     meal_id: str
     meal_type: str
-    image_url: Optional[str] = None
+    image_url: str | None = None
     food_items: list[FoodItemResponse]
     # Aggregated totals
     total_calories: float
@@ -39,7 +38,7 @@ class MealSummary(BaseModel):
 
     id: str
     meal_type: str
-    image_url: Optional[str] = None
+    image_url: str | None = None
     total_calories: float
     total_protein_g: float
     total_carbs_g: float
@@ -56,8 +55,8 @@ class MealDetailResponse(BaseModel):
 
     id: str
     meal_type: str
-    image_url: Optional[str] = None
-    notes: Optional[str] = None
+    image_url: str | None = None
+    notes: str | None = None
     food_items: list[FoodItemResponse]
     total_calories: float
     total_protein_g: float
@@ -66,8 +65,8 @@ class MealDetailResponse(BaseModel):
     total_fiber_g: float
     vitamins_summary: list[NutrientInfo] = Field(default_factory=list)
     minerals_summary: list[NutrientInfo] = Field(default_factory=list)
-    ai_provider: Optional[str] = None
-    ai_model: Optional[str] = None
+    ai_provider: str | None = None
+    ai_model: str | None = None
     is_manually_edited: bool
     created_at: datetime
 
@@ -83,14 +82,32 @@ class MealHistoryResponse(BaseModel):
     daily_totals: dict
 
 
+class ScanSubmitResponse(BaseModel):
+    """Response for POST /meals/scan — immediate acknowledgement."""
+
+    scan_id: str
+    status: str  # always "pending"
+    poll_url: str
+
+
+class ScanStatusResponse(BaseModel):
+    """Response for GET /meals/scan/{scan_id}/status — polling result."""
+
+    scan_id: str
+    status: str  # pending | processing | completed | failed
+    meal_id: str | None = None
+    result: MealScanResponse | None = None
+    error: dict | None = None
+
+
 class MealItemUpdate(BaseModel):
     """Request body for PATCH /meals/{id}/items/{item_id}."""
 
-    name: Optional[str] = None
-    estimated_portion: Optional[str] = None
-    estimated_weight_g: Optional[float] = Field(None, gt=0)
-    calories: Optional[float] = Field(None, ge=0)
-    protein_g: Optional[float] = Field(None, ge=0)
-    carbs_g: Optional[float] = Field(None, ge=0)
-    fat_g: Optional[float] = Field(None, ge=0)
-    fiber_g: Optional[float] = Field(None, ge=0)
+    name: str | None = None
+    estimated_portion: str | None = None
+    estimated_weight_g: float | None = Field(None, gt=0)
+    calories: float | None = Field(None, ge=0)
+    protein_g: float | None = Field(None, ge=0)
+    carbs_g: float | None = Field(None, ge=0)
+    fat_g: float | None = Field(None, ge=0)
+    fiber_g: float | None = Field(None, ge=0)

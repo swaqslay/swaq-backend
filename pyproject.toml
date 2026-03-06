@@ -36,6 +36,8 @@ dependencies = [
     "boto3>=1.35.0",            # Cloudflare R2 (S3-compatible)
     # Multipart uploads
     "python-multipart>=0.0.20",
+    # Task queue
+    "arq>=0.26",
 ]
 
 [project.optional-dependencies]
@@ -63,7 +65,7 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP"]
-ignore = ["E501"]
+ignore = ["E501", "UP017"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["app"]

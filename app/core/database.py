@@ -174,6 +174,10 @@ else:
                 await session.rollback()
                 raise
 
+    def get_async_session_factory() -> async_sessionmaker:
+        """Return the async session factory for use outside request scope (e.g., workers)."""
+        return _async_session_factory
+
     async def init_db() -> None:
         """Verify DB connection using async engine."""
         async with engine.connect() as conn:

@@ -5,23 +5,26 @@ Used via Depends() in route handlers.
 
 import logging
 import uuid
-from typing import Optional
 
-from fastapi import Depends, Header
+from fastapi import Depends, Header, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.exceptions import auth_token_invalid
-from app.core.redis import get_redis
 from app.core.security import ACCESS_TOKEN_TYPE, verify_token
 from app.models.user import User
 
 logger = logging.getLogger(__name__)
 
 
+async def get_arq_pool(request: Request) -> object:
+    """Get the ARQ pool from app state. Returns None if unavailable."""
+    return getattr(request.app.state, "arq_pool", None)
+
+
 async def get_current_user(
-    authorization: Optional[str] = Header(None),
+    authorization: str | None = Header(None),
     db: AsyncSession = Depends(get_db),
 ) -> User:
     """

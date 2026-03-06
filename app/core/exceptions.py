@@ -118,6 +118,13 @@ def ai_all_providers_failed() -> ServiceUnavailableError:
     )
 
 
+def scan_not_found() -> NotFoundError:
+    return NotFoundError(
+        "Scan not found or has expired.",
+        "SCAN_NOT_FOUND",
+    )
+
+
 def premium_required() -> ForbiddenError:
     return ForbiddenError(
         "Free plan allows 3 scans/day. Upgrade to Premium for unlimited scans.",
