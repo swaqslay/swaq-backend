@@ -5,6 +5,7 @@ Contains the process_meal_scan task and Redis scan state helpers.
 Run separately: arq app.services.scan_worker.WorkerSettings
 """
 
+import asyncio
 import base64
 import json
 import logging
@@ -89,9 +90,11 @@ async def process_meal_scan(
         # Decode image bytes
         image_bytes = base64.b64decode(image_bytes_b64)
 
-        # AI recognition
+        # AI recognition + nutrition (combined single call)
         recognizer = AIFoodRecognizer()
-        recognition = await recognizer.analyze_food_image(image_bytes, content_type)
+        recognition = await recognizer.analyze_food_image_with_nutrition(
+            image_bytes, content_type
+        )
 
         raw_food_items = recognition.get("food_items", [])
         if not raw_food_items:
@@ -118,16 +121,14 @@ async def process_meal_scan(
         ai_provider = recognition.get("_ai_provider", "unknown")
         ai_model = recognition.get("_ai_model", "unknown")
 
-        # Nutrition estimation
-        nutrition_result = await recognizer.estimate_nutrition(raw_food_items)
-        nutrition_items = (
-            nutrition_result.get("food_items", []) if nutrition_result else raw_food_items
-        )
+        # Combined result already has nutrition in food_items
+        nutrition_items = raw_food_items
 
         nutrition_service = NutritionLookup()
-        enriched_items: list[dict] = []
 
-        for item in nutrition_items:
+        # Parallel USDA lookups — each uses Redis cache (thread-safe)
+        async def _lookup_one(item: dict) -> tuple[dict, dict]:
+            """Lookup nutrition for a single item, return (item, nutrition)."""
             weight_g = item.get("estimated_weight_g", 100)
             nutrition = await nutrition_service.get_nutrition_with_cache(
                 food_name=item["name"],
@@ -136,18 +137,25 @@ async def process_meal_scan(
                 redis=redis,
                 db=db,
             )
+            return item, nutrition
 
-            orig = next(
-                (r for r in raw_food_items if r["name"].lower() == item["name"].lower()),
-                raw_food_items[0] if raw_food_items else {},
-            )
+        results = await asyncio.gather(
+            *[_lookup_one(item) for item in nutrition_items],
+            return_exceptions=True,
+        )
 
+        enriched_items: list[dict] = []
+        for result in results:
+            if isinstance(result, Exception):
+                logger.warning(f"Nutrition lookup failed for an item: {result}")
+                continue
+            item, nutrition = result
             enriched_items.append(
                 {
                     "name": item["name"],
-                    "confidence": orig.get("confidence", 0.8),
-                    "estimated_portion": orig.get("estimated_portion", "1 serving"),
-                    "estimated_weight_g": weight_g,
+                    "confidence": item.get("confidence", 0.8),
+                    "estimated_portion": item.get("estimated_portion", "1 serving"),
+                    "estimated_weight_g": item.get("estimated_weight_g", 100),
                     "calories": nutrition.get("calories", item.get("calories", 0)),
                     "protein_g": nutrition.get("protein_g", item.get("protein_g", 0)),
                     "carbs_g": nutrition.get("carbs_g", item.get("carbs_g", 0)),
@@ -329,6 +337,13 @@ async def process_meal_scan(
             },
         )
     finally:
+        for obj_name in ("recognizer", "nutrition_service"):
+            try:
+                obj = locals().get(obj_name)
+                if obj and hasattr(obj, "close"):
+                    await obj.close()
+            except Exception:
+                pass
         await db.close()
 
 

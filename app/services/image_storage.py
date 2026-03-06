@@ -5,8 +5,8 @@ Handles upload, signed URL generation, and deletion.
 Cloudflare R2 settings are retained in config for future migration.
 """
 
+import asyncio
 import logging
-from typing import Optional
 
 import boto3
 from botocore.exceptions import ClientError, NoCredentialsError
@@ -38,7 +38,7 @@ async def upload_image(
     user_id: str,
     image_bytes: bytes,
     mime_type: str,
-) -> Optional[str]:
+) -> str | None:
     """
     Upload an image to Backblaze B2 and return the object key.
 
@@ -59,11 +59,13 @@ async def upload_image(
 
     try:
         client = _get_b2_client()
-        client.put_object(
-            Bucket=settings.backblaze_b2_bucket,
-            Key=key,
-            Body=image_bytes,
-            ContentType=mime_type,
+        await asyncio.to_thread(
+            lambda: client.put_object(
+                Bucket=settings.backblaze_b2_bucket,
+                Key=key,
+                Body=image_bytes,
+                ContentType=mime_type,
+            )
         )
         logger.info(f"Uploaded image to B2: {key}")
         return key
@@ -72,7 +74,7 @@ async def upload_image(
         return None
 
 
-def get_signed_url(key: str, expires_in: int = 3600) -> Optional[str]:
+def get_signed_url(key: str, expires_in: int = 3600) -> str | None:
     """
     Generate a pre-signed URL for accessing a B2 object.
 
@@ -111,7 +113,9 @@ async def delete_image(key: str) -> None:
 
     try:
         client = _get_b2_client()
-        client.delete_object(Bucket=settings.backblaze_b2_bucket, Key=key)
+        await asyncio.to_thread(
+            lambda: client.delete_object(Bucket=settings.backblaze_b2_bucket, Key=key)
+        )
         logger.info(f"Deleted image from B2: {key}")
     except Exception as exc:
         logger.warning(f"B2 delete failed for {key}: {exc}")

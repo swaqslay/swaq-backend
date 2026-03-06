@@ -503,11 +503,19 @@ async def test_process_meal_scan_worker_success(test_db):
         patch.object(test_db, "close", new_callable=AsyncMock),
     ):
         mock_rec = mock_recognizer_cls.return_value
-        mock_rec.analyze_food_image = AsyncMock(return_value=MOCK_AI_RECOGNITION)
-        mock_rec.estimate_nutrition = AsyncMock(return_value=MOCK_AI_NUTRITION)
+        # Combined call returns food items with nutrition already included
+        combined_result = {
+            **MOCK_AI_RECOGNITION,
+            "food_items": [
+                {**MOCK_AI_RECOGNITION["food_items"][0], **MOCK_AI_NUTRITION["food_items"][0]}
+            ],
+        }
+        mock_rec.analyze_food_image_with_nutrition = AsyncMock(return_value=combined_result)
+        mock_rec.close = AsyncMock()
 
         mock_nut = mock_nutrition_cls.return_value
         mock_nut.get_nutrition_with_cache = AsyncMock(return_value=MOCK_NUTRITION_SCALED)
+        mock_nut.close = AsyncMock()
 
         await process_meal_scan(
             ctx, scan_id, image_b64, "image/jpeg", user_id, "lunch", None, None
@@ -567,9 +575,10 @@ async def test_process_meal_scan_worker_ai_failure(test_db):
         patch.object(test_db, "close", new_callable=AsyncMock),
     ):
         mock_rec = mock_recognizer_cls.return_value
-        mock_rec.analyze_food_image = AsyncMock(
+        mock_rec.analyze_food_image_with_nutrition = AsyncMock(
             side_effect=AIProviderError("All AI providers failed")
         )
+        mock_rec.close = AsyncMock()
 
         await process_meal_scan(
             ctx, scan_id, image_b64, "image/jpeg", user_id, "lunch", None, None

@@ -22,6 +22,8 @@ from app.core.config import get_settings
 from app.core.exceptions import ai_all_providers_failed
 from app.utils.constants import MAX_IMAGE_DIMENSION_PX
 from app.utils.prompts import (
+    COMBINED_RECOGNITION_SYSTEM_PROMPT,
+    COMBINED_RECOGNITION_USER_PROMPT,
     FOOD_RECOGNITION_SYSTEM_PROMPT,
     FOOD_RECOGNITION_USER_PROMPT,
     NUTRITION_ESTIMATION_PROMPT,
@@ -43,9 +45,11 @@ def preprocess_image(image_bytes: bytes, mime_type: str) -> tuple[bytes, str]:
     """
     img = Image.open(BytesIO(image_bytes))
 
-    # Strip EXIF by re-creating a clean image (no metadata)
-    clean_img = Image.new(img.mode, img.size)
-    clean_img.putdata(list(img.getdata()))
+    # Strip EXIF by copying pixel data without metadata (fast path)
+    clean_img = img.copy()
+    clean_img.info = {}
+    if hasattr(clean_img, "_exif"):
+        del clean_img._exif
 
     # Resize if too large
     max_dim = MAX_IMAGE_DIMENSION_PX
@@ -59,7 +63,7 @@ def preprocess_image(image_bytes: bytes, mime_type: str) -> tuple[bytes, str]:
 
     # Save as JPEG
     buf = BytesIO()
-    clean_img.save(buf, format="JPEG", quality=90)
+    clean_img.save(buf, format="JPEG", quality=85)
     return buf.getvalue(), "image/jpeg"
 
 
@@ -86,6 +90,80 @@ class AIFoodRecognizer:
 
     def __init__(self):
         self.gemini_api_key = settings.gemini_api_key
+        self._gemini_client: httpx.AsyncClient | None = None
+
+    async def _get_gemini_client(self) -> httpx.AsyncClient:
+        """Get or create reusable httpx client for Gemini API."""
+        if self._gemini_client is None or self._gemini_client.is_closed:
+            self._gemini_client = httpx.AsyncClient(timeout=30.0)
+        return self._gemini_client
+
+    async def close(self) -> None:
+        """Close the shared HTTP client."""
+        if self._gemini_client and not self._gemini_client.is_closed:
+            await self._gemini_client.aclose()
+
+    async def analyze_food_image_with_nutrition(
+        self, image_bytes: bytes, mime_type: str = "image/jpeg"
+    ) -> dict:
+        """
+        Combined single-call: identify food items AND estimate nutrition in one AI call.
+        Falls back to the two-step pipeline if the combined response is incomplete.
+
+        Returns:
+            dict with keys: food_items (with nutrition), meal_description, cuisine_type,
+                            _ai_provider, _ai_model
+        """
+        processed_bytes, processed_mime = preprocess_image(image_bytes, mime_type)
+
+        # Try combined call with Gemini
+        try:
+            result = await self._combined_gemini(processed_bytes, processed_mime)
+            if result and self._has_nutrition_data(result):
+                result["_ai_provider"] = "gemini"
+                result["_ai_model"] = "gemini-2.0-flash"
+                logger.info("Combined recognition+nutrition succeeded via Gemini")
+                return result
+        except Exception as exc:
+            logger.warning(f"Gemini combined call failed: {exc}")
+
+        # Try combined call with OpenRouter
+        try:
+            result = await self._combined_openrouter(processed_bytes, processed_mime)
+            if result and self._has_nutrition_data(result):
+                logger.info(
+                    f"Combined recognition+nutrition succeeded via OpenRouter"
+                    f" ({result.get('_ai_model')})"
+                )
+                return result
+        except Exception as exc:
+            logger.warning(f"OpenRouter combined call failed: {exc}")
+
+        # Fallback: two-step pipeline (existing logic)
+        logger.info("Combined call failed/incomplete, falling back to two-step pipeline")
+        return await self._two_step_fallback(image_bytes, mime_type)
+
+    async def _two_step_fallback(self, image_bytes: bytes, mime_type: str) -> dict:
+        """Run the original two-step pipeline: vision -> nutrition."""
+        recognition = await self.analyze_food_image(image_bytes, mime_type)
+        raw_items = recognition.get("food_items", [])
+        if not raw_items:
+            return recognition
+        nutrition_result = await self.estimate_nutrition(raw_items)
+        nutrition_items = (
+            nutrition_result.get("food_items", []) if nutrition_result else raw_items
+        )
+        recognition["food_items"] = nutrition_items
+        return recognition
+
+    @staticmethod
+    def _has_nutrition_data(result: dict) -> bool:
+        """Check if food items include nutrition fields (calories, protein_g, etc.)."""
+        items = result.get("food_items", [])
+        if not items:
+            return False
+        first = items[0]
+        return "calories" in first and "protein_g" in first
 
     async def analyze_food_image(self, image_bytes: bytes, mime_type: str = "image/jpeg") -> dict:
         """
@@ -181,15 +259,15 @@ class AIFoodRecognizer:
             ],
             "generationConfig": {
                 "temperature": 0.15,
-                "maxOutputTokens": 2048,
+                "maxOutputTokens": 1024,
                 "responseMimeType": "application/json",
             },
         }
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(url, json=payload)
-            resp.raise_for_status()
-            data = resp.json()
+        client = await self._get_gemini_client()
+        resp = await client.post(url, json=payload, timeout=30.0)
+        resp.raise_for_status()
+        data = resp.json()
 
         text = data["candidates"][0]["content"]["parts"][0]["text"]
         return self._parse_json_response(text)
@@ -212,10 +290,10 @@ class AIFoodRecognizer:
             },
         }
 
-        async with httpx.AsyncClient(timeout=45.0) as client:
-            resp = await client.post(url, json=payload)
-            resp.raise_for_status()
-            data = resp.json()
+        client = await self._get_gemini_client()
+        resp = await client.post(url, json=payload, timeout=20.0)
+        resp.raise_for_status()
+        data = resp.json()
 
         text = data["candidates"][0]["content"]["parts"][0]["text"]
         return self._parse_json_response(text)
@@ -254,7 +332,7 @@ class AIFoodRecognizer:
                         model=model,
                         messages=messages,
                         temperature=0.15,
-                        max_tokens=2048,
+                        max_tokens=1024,
                     )
                     text = response.choices[0].message.content
                     result = self._parse_json_response(text)
@@ -290,6 +368,98 @@ class AIFoodRecognizer:
                         return result
                 except Exception as exc:
                     logger.warning(f"OpenRouter text model '{model}' failed: {exc}")
+
+        return None
+
+    # ── Combined (single-call) implementations ───────────────────────────────
+
+    async def _combined_gemini(self, image_bytes: bytes, mime_type: str) -> dict | None:
+        """Single Gemini call for recognition + nutrition."""
+        if not self.gemini_api_key:
+            logger.debug("GEMINI_API_KEY not set, skipping Gemini combined")
+            return None
+
+        b64_image = base64.b64encode(image_bytes).decode("utf-8")
+        url = (
+            f"https://generativelanguage.googleapis.com/v1beta/models/"
+            f"gemini-2.0-flash:generateContent?key={self.gemini_api_key}"
+        )
+        payload = {
+            "contents": [
+                {
+                    "parts": [
+                        {
+                            "text": COMBINED_RECOGNITION_SYSTEM_PROMPT
+                            + "\n\n"
+                            + COMBINED_RECOGNITION_USER_PROMPT
+                        },
+                        {"inline_data": {"mime_type": mime_type, "data": b64_image}},
+                    ]
+                }
+            ],
+            "generationConfig": {
+                "temperature": 0.15,
+                "maxOutputTokens": 4096,
+                "responseMimeType": "application/json",
+            },
+        }
+
+        client = await self._get_gemini_client()
+        resp = await client.post(url, json=payload, timeout=30.0)
+        resp.raise_for_status()
+        data = resp.json()
+
+        text = data["candidates"][0]["content"]["parts"][0]["text"]
+        return self._parse_json_response(text)
+
+    async def _combined_openrouter(
+        self, image_bytes: bytes, mime_type: str
+    ) -> dict | None:
+        """Single OpenRouter call for recognition + nutrition."""
+        if not settings.openrouter_api_key:
+            logger.debug("OPENROUTER_API_KEY not set, skipping OpenRouter combined")
+            return None
+
+        b64_image = base64.b64encode(image_bytes).decode("utf-8")
+        image_data_url = f"data:{mime_type};base64,{b64_image}"
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": COMBINED_RECOGNITION_SYSTEM_PROMPT
+                        + "\n\n"
+                        + COMBINED_RECOGNITION_USER_PROMPT,
+                    },
+                    {"type": "image_url", "image_url": {"url": image_data_url}},
+                ],
+            },
+        ]
+
+        async with AsyncOpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=settings.openrouter_api_key,
+        ) as client:
+            for model in self.OPENROUTER_VISION_MODELS:
+                try:
+                    response = await client.chat.completions.create(
+                        model=model,
+                        messages=messages,
+                        temperature=0.15,
+                        max_tokens=4096,
+                    )
+                    text = response.choices[0].message.content
+                    result = self._parse_json_response(text)
+                    if result:
+                        result["_ai_provider"] = "openrouter"
+                        result["_ai_model"] = model
+                        return result
+                except Exception as exc:
+                    logger.warning(
+                        f"OpenRouter combined model '{model}' failed: {exc}"
+                    )
 
         return None
 

@@ -78,6 +78,145 @@ async def test_all_providers_fail_raises_error():
             await recognizer.analyze_food_image(b"fake", "image/jpeg")
 
 
+MOCK_COMBINED_RESULT = {
+    "food_items": [
+        {
+            "name": "chicken biryani",
+            "confidence": 0.92,
+            "estimated_portion": "1 bowl",
+            "estimated_weight_g": 300,
+            "calories": 555,
+            "protein_g": 31,
+            "carbs_g": 59,
+            "fat_g": 22,
+            "fiber_g": 2.4,
+            "vitamins": [],
+            "minerals": [],
+        },
+    ],
+    "meal_description": "Chicken biryani with raita",
+    "cuisine_type": "Indian",
+}
+
+
+@pytest.mark.asyncio
+async def test_combined_gemini_success():
+    """Combined call returns food items with nutrition in one call."""
+    recognizer = AIFoodRecognizer()
+    with (
+        patch(
+            "app.services.ai_food_recognizer.preprocess_image",
+            return_value=(b"processed", "image/jpeg"),
+        ),
+        patch.object(
+            recognizer, "_combined_gemini", new_callable=AsyncMock
+        ) as mock_combined,
+    ):
+        mock_combined.return_value = MOCK_COMBINED_RESULT
+        result = await recognizer.analyze_food_image_with_nutrition(b"fake", "image/jpeg")
+
+    assert result["_ai_provider"] == "gemini"
+    assert result["food_items"][0]["calories"] == 555
+    assert result["food_items"][0]["protein_g"] == 31
+
+
+@pytest.mark.asyncio
+async def test_combined_falls_back_to_two_step():
+    """If combined call returns no nutrition data, falls back to two-step."""
+    recognizer = AIFoodRecognizer()
+    incomplete_result = {
+        "food_items": [
+            {
+                "name": "rice",
+                "confidence": 0.9,
+                "estimated_portion": "1 bowl",
+                "estimated_weight_g": 200,
+            }
+        ],
+        "meal_description": "Rice",
+        "cuisine_type": "Indian",
+    }
+    with (
+        patch(
+            "app.services.ai_food_recognizer.preprocess_image",
+            return_value=(b"processed", "image/jpeg"),
+        ),
+        patch.object(
+            recognizer,
+            "_combined_gemini",
+            new_callable=AsyncMock,
+            return_value=incomplete_result,
+        ),
+        patch.object(
+            recognizer,
+            "_combined_openrouter",
+            new_callable=AsyncMock,
+            return_value=incomplete_result,
+        ),
+        patch.object(
+            recognizer, "_two_step_fallback", new_callable=AsyncMock
+        ) as mock_fallback,
+    ):
+        mock_fallback.return_value = {
+            **MOCK_COMBINED_RESULT,
+            "_ai_provider": "gemini",
+            "_ai_model": "gemini-2.0-flash",
+        }
+        result = await recognizer.analyze_food_image_with_nutrition(b"fake", "image/jpeg")
+
+    mock_fallback.assert_called_once()
+    assert result["food_items"][0]["calories"] == 555
+
+
+@pytest.mark.asyncio
+async def test_combined_all_fail_raises():
+    """If combined + two-step all fail, raises ServiceUnavailableError."""
+    recognizer = AIFoodRecognizer()
+    with (
+        patch(
+            "app.services.ai_food_recognizer.preprocess_image",
+            return_value=(b"processed", "image/jpeg"),
+        ),
+        patch.object(
+            recognizer,
+            "_combined_gemini",
+            new_callable=AsyncMock,
+            side_effect=Exception("fail"),
+        ),
+        patch.object(
+            recognizer,
+            "_combined_openrouter",
+            new_callable=AsyncMock,
+            side_effect=Exception("fail"),
+        ),
+        patch.object(
+            recognizer,
+            "_two_step_fallback",
+            new_callable=AsyncMock,
+            side_effect=ServiceUnavailableError("all failed", "AI_ALL_PROVIDERS_FAILED"),
+        ),
+    ):
+        with pytest.raises(ServiceUnavailableError):
+            await recognizer.analyze_food_image_with_nutrition(b"fake", "image/jpeg")
+
+
+def test_has_nutrition_data_with_nutrition():
+    """_has_nutrition_data returns True when food items have calories+protein."""
+    result = {"food_items": [{"name": "rice", "calories": 200, "protein_g": 4}]}
+    assert AIFoodRecognizer._has_nutrition_data(result) is True
+
+
+def test_has_nutrition_data_without_nutrition():
+    """_has_nutrition_data returns False when food items lack nutrition fields."""
+    result = {"food_items": [{"name": "rice", "confidence": 0.9}]}
+    assert AIFoodRecognizer._has_nutrition_data(result) is False
+
+
+def test_has_nutrition_data_empty():
+    """_has_nutrition_data returns False for empty food list."""
+    assert AIFoodRecognizer._has_nutrition_data({"food_items": []}) is False
+
+
 def test_parse_json_clean():
     result = AIFoodRecognizer._parse_json_response('{"food_items": []}')
     assert result == {"food_items": []}

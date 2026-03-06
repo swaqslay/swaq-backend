@@ -7,7 +7,6 @@ Nutrition lookup service — three-tier lookup pipeline:
 
 import json
 import logging
-from typing import Optional
 
 import httpx
 from sqlalchemy import select
@@ -18,7 +17,6 @@ from app.models.nutrition_cache import NutritionCache
 from app.utils.constants import (
     DAILY_VALUES,
     REDIS_TTL_NUTRITION,
-    REDIS_TTL_USDA_SEARCH,
     USDA_NUTRIENT_IDS,
 )
 from app.utils.helpers import normalize_food_name
@@ -40,6 +38,18 @@ class NutritionLookup:
 
     def __init__(self):
         self.api_key = settings.usda_api_key
+        self._client: httpx.AsyncClient | None = None
+
+    async def _get_client(self) -> httpx.AsyncClient:
+        """Get or create reusable httpx client for USDA API."""
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.AsyncClient(timeout=10.0)
+        return self._client
+
+    async def close(self) -> None:
+        """Close the shared HTTP client."""
+        if self._client and not self._client.is_closed:
+            await self._client.aclose()
 
     async def get_nutrition_with_cache(
         self,
@@ -47,7 +57,7 @@ class NutritionLookup:
         weight_g: float,
         ai_estimate: dict,
         redis=None,
-        db: Optional[AsyncSession] = None,
+        db: AsyncSession | None = None,
     ) -> dict:
         """
         Get nutrition data for a food item using the three-tier lookup.
@@ -113,7 +123,7 @@ class NutritionLookup:
 
         return self._scale_to_portion(usda_data, weight_g)
 
-    async def _fetch_from_usda(self, food_name: str) -> Optional[dict]:
+    async def _fetch_from_usda(self, food_name: str) -> dict | None:
         """Search USDA and get detailed nutrients for the best match."""
         if not self.api_key:
             return None
@@ -137,10 +147,10 @@ class NutritionLookup:
         }
 
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                resp = await client.get(url, params=params)
-                resp.raise_for_status()
-                data = resp.json()
+            client = await self._get_client()
+            resp = await client.get(url, params=params, timeout=15.0)
+            resp.raise_for_status()
+            data = resp.json()
 
             return [
                 {
@@ -153,16 +163,16 @@ class NutritionLookup:
             logger.error(f"USDA search failed for '{food_name}': {exc}")
             return []
 
-    async def get_food_nutrients(self, fdc_id: int) -> Optional[dict]:
+    async def get_food_nutrients(self, fdc_id: int) -> dict | None:
         """Get full nutrient profile for a USDA food by FDC ID (per 100g)."""
         url = f"{USDA_BASE_URL}/food/{fdc_id}"
         params = {"api_key": self.api_key}
 
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                resp = await client.get(url, params=params)
-                resp.raise_for_status()
-                data = resp.json()
+            client = await self._get_client()
+            resp = await client.get(url, params=params, timeout=15.0)
+            resp.raise_for_status()
+            data = resp.json()
 
             # Build nutrient_id → {name, amount, unit} map
             nutrient_map: dict[int, dict] = {}
@@ -285,10 +295,10 @@ class NutritionLookup:
         self,
         normalized_name: str,
         data: dict,
-        fdc_id: Optional[int],
+        fdc_id: int | None,
         source: str,
         redis,
-        db: Optional[AsyncSession],
+        db: AsyncSession | None,
     ) -> None:
         """Store nutrition data in Redis and PostgreSQL cache."""
         cache_key = f"nutrition:{normalized_name}"
