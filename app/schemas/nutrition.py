@@ -3,8 +3,6 @@ Pydantic schemas for nutrition data structures.
 Used by meal scan responses and dashboard.
 """
 
-from typing import Optional
-
 from pydantic import BaseModel, Field
 
 
@@ -14,7 +12,7 @@ class NutrientInfo(BaseModel):
     name: str
     amount: float
     unit: str
-    daily_value_percent: Optional[float] = None
+    daily_value_percent: float | None = None
 
 
 class FoodItemResponse(BaseModel):

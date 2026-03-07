@@ -6,7 +6,7 @@ Used via Depends() in route handlers.
 import logging
 import uuid
 
-from fastapi import Depends, Header, Request
+from fastapi import Depends, Header
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,11 +16,6 @@ from app.core.security import ACCESS_TOKEN_TYPE, verify_token
 from app.models.user import User
 
 logger = logging.getLogger(__name__)
-
-
-async def get_arq_pool(request: Request) -> object:
-    """Get the ARQ pool from app state. Returns None if unavailable."""
-    return getattr(request.app.state, "arq_pool", None)
 
 
 async def get_current_user(
@@ -65,5 +60,6 @@ async def get_current_active_user(
     """
     if not current_user.is_active:
         from app.core.exceptions import AuthenticationError
+
         raise AuthenticationError("Account is deactivated.", "ACCOUNT_DEACTIVATED")
     return current_user

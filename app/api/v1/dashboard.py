@@ -18,7 +18,12 @@ from app.core.exceptions import profile_not_found
 from app.models.meal import Meal
 from app.models.user import User, UserProfile
 from app.schemas.common import APIResponse
-from app.schemas.dashboard import DailyConsumed, DailyTargets, DailySummaryResponse, WeeklyReportResponse
+from app.schemas.dashboard import (
+    DailyConsumed,
+    DailySummaryResponse,
+    DailyTargets,
+    WeeklyReportResponse,
+)
 from app.services.recommendation_engine import generate_recommendations
 from app.utils.helpers import get_today_utc
 
@@ -126,7 +131,11 @@ async def get_weekly_report(
             func.coalesce(func.sum(Meal.total_carbs_g), 0),
             func.coalesce(func.sum(Meal.total_fat_g), 0),
         ).where(
-            and_(Meal.user_id == current_user.id, Meal.created_at >= start_dt, Meal.created_at <= end_dt)
+            and_(
+                Meal.user_id == current_user.id,
+                Meal.created_at >= start_dt,
+                Meal.created_at <= end_dt,
+            )
         )
     )
     row = result.one()
@@ -147,9 +156,15 @@ async def get_weekly_report(
         select(
             func.date(Meal.created_at),
             func.sum(Meal.total_calories),
-        ).where(
-            and_(Meal.user_id == current_user.id, Meal.created_at >= start_dt, Meal.created_at <= end_dt)
-        ).group_by(func.date(Meal.created_at))
+        )
+        .where(
+            and_(
+                Meal.user_id == current_user.id,
+                Meal.created_at >= start_dt,
+                Meal.created_at <= end_dt,
+            )
+        )
+        .group_by(func.date(Meal.created_at))
     )
     days_on_target = sum(1 for _, day_cal in days_result.all() if lower <= float(day_cal) <= upper)
 

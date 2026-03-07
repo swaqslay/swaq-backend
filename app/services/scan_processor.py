@@ -1,132 +1,87 @@
 """
-ARQ worker for async meal scanning.
+Inline meal scan processor.
 
-Contains the process_meal_scan task and Redis scan state helpers.
-Run separately: arq app.services.scan_worker.WorkerSettings
+Processes a food photo synchronously within the HTTP request:
+  1. AI food recognition + nutrition estimation (combined single call)
+  2. USDA nutrition enrichment (parallel lookups)
+  3. Save meal to database
+  4. Generate recommendations
+  5. Return MealScanResponse
 """
 
 import asyncio
-import base64
-import json
 import logging
-import traceback
 import uuid
 from datetime import datetime, timezone
 
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.exceptions import meal_scan_failed
+from app.models.user import UserProfile
+from app.schemas.meal import MealScanResponse
+from app.schemas.nutrition import FoodItemResponse, NutrientInfo
+from app.services import meal_service
+from app.services.ai_food_recognizer import AIFoodRecognizer
+from app.services.nutrition_lookup import NutritionLookup
+from app.services.recommendation_engine import generate_recommendations
+
 logger = logging.getLogger(__name__)
 
-# ── Redis scan state helpers ─────────────────────────────────────────────────
 
-SCAN_KEY_PREFIX = "scan:"
-SCAN_TTL_SECONDS = 3600  # 1 hour
-
-
-async def set_scan_state(redis: object, scan_id: str, state: dict) -> None:
-    """Store scan state in Redis with TTL."""
-    state["updated_at"] = datetime.now(timezone.utc).isoformat()
-    await redis.set(
-        f"{SCAN_KEY_PREFIX}{scan_id}",
-        json.dumps(state),
-        ex=SCAN_TTL_SECONDS,
-    )
-
-
-async def get_scan_state(redis: object, scan_id: str) -> dict | None:
-    """Retrieve scan state from Redis."""
-    data = await redis.get(f"{SCAN_KEY_PREFIX}{scan_id}")
-    if data is None:
-        return None
-    return json.loads(data)
-
-
-# ── ARQ task ─────────────────────────────────────────────────────────────────
-
-
-async def process_meal_scan(
-    ctx: dict,
-    scan_id: str,
-    image_bytes_b64: str,
+async def process_scan_inline(
+    image_bytes: bytes,
     content_type: str,
-    user_id: str,
+    user_id: uuid.UUID,
     meal_type: str,
     notes: str | None,
     image_url: str | None,
-) -> None:
+    db: AsyncSession,
+    redis: object | None,
+) -> MealScanResponse:
     """
-    ARQ task: process a meal scan in the background.
+    Process a food photo scan inline within the HTTP request.
 
-    Steps:
-    1. Set status to processing
-    2. Run AI food recognition
-    3. Estimate nutrition per item
-    4. Save meal to database
-    5. Generate recommendations
-    6. Set status to completed with result
+    Args:
+        image_bytes: Raw image bytes (already validated for format/size).
+        content_type: MIME type of the image.
+        user_id: Authenticated user's UUID.
+        meal_type: One of breakfast, lunch, dinner, snack.
+        notes: Optional user notes for the meal.
+        image_url: URL of uploaded image (or None if storage not configured).
+        db: Database session from request dependency injection.
+        redis: Redis client (optional — caching skipped if None).
+
+    Returns:
+        MealScanResponse with full nutrition breakdown.
+
+    Raises:
+        ValidationError (MEAL_SCAN_FAILED): If AI returns no food items.
+        AIProviderError / ServiceUnavailableError: If all AI providers fail.
     """
-    # Lazy imports to avoid circular dependencies
-    from sqlalchemy import select
-
-    from app.models.user import UserProfile
-    from app.schemas.meal import MealScanResponse
-    from app.schemas.nutrition import FoodItemResponse, NutrientInfo
-    from app.services import meal_service
-    from app.services.ai_food_recognizer import AIFoodRecognizer
-    from app.services.nutrition_lookup import NutritionLookup
-    from app.services.recommendation_engine import generate_recommendations
-
-    redis = ctx["redis"]
-
-    # Set status to processing
-    current_state = await get_scan_state(redis, scan_id)
-    if current_state:
-        current_state["status"] = "processing"
-        await set_scan_state(redis, scan_id, current_state)
-
-    # Get a DB session from the factory
-    session_factory = ctx["session_factory"]
-    db = session_factory()
-
+    recognizer = None
+    nutrition_service = None
     try:
-        # Decode image bytes
-        image_bytes = base64.b64decode(image_bytes_b64)
-
-        # AI recognition + nutrition (combined single call)
+        # Step 1: AI recognition + nutrition (combined single call)
         recognizer = AIFoodRecognizer()
-        recognition = await recognizer.analyze_food_image_with_nutrition(
-            image_bytes, content_type
-        )
+        recognition = await recognizer.analyze_food_image_with_nutrition(image_bytes, content_type)
 
         raw_food_items = recognition.get("food_items", [])
         if not raw_food_items:
-            await set_scan_state(
-                redis,
-                scan_id,
-                {
-                    "status": "failed",
-                    "user_id": user_id,
-                    "meal_type": meal_type,
-                    "image_url": image_url,
-                    "meal_id": None,
-                    "result": None,
-                    "error": json.dumps(
-                        {
-                            "code": "MEAL_SCAN_FAILED",
-                            "message": "Could not identify any food items in the image.",
-                        }
-                    ),
-                },
-            )
-            return
+            raise meal_scan_failed()
 
         ai_provider = recognition.get("_ai_provider", "unknown")
         ai_model = recognition.get("_ai_model", "unknown")
 
-        # Combined result already has nutrition in food_items
+        # Combined result already has nutrition embedded in food_items
         nutrition_items = raw_food_items
 
         nutrition_service = NutritionLookup()
 
-        # Parallel USDA lookups — each uses Redis cache (thread-safe)
+        # Step 2: Parallel USDA lookups
+        # WARNING: db session is shared across concurrent lookups.
+        # Safe for Redis-cached hits; DB writes in _store_in_cache are
+        # wrapped in try/except. See plan-v2.md risk area #3.
         async def _lookup_one(item: dict) -> tuple[dict, dict]:
             """Lookup nutrition for a single item, return (item, nutrition)."""
             weight_g = item.get("estimated_weight_g", 100)
@@ -144,10 +99,11 @@ async def process_meal_scan(
             return_exceptions=True,
         )
 
+        # Step 3: Build enriched items list
         enriched_items: list[dict] = []
         for result in results:
             if isinstance(result, Exception):
-                logger.warning(f"Nutrition lookup failed for an item: {result}")
+                logger.warning("Nutrition lookup failed for an item: %s", result)
                 continue
             item, nutrition = result
             enriched_items.append(
@@ -166,10 +122,9 @@ async def process_meal_scan(
                 }
             )
 
-        # Save to database
-        user_uuid = uuid.UUID(user_id)
+        # Step 4: Save to database
         meal = await meal_service.create_meal(
-            user_id=user_uuid,
+            user_id=user_id,
             meal_type=meal_type,
             food_items_data=enriched_items,
             ai_provider=ai_provider,
@@ -180,7 +135,7 @@ async def process_meal_scan(
         )
         await db.commit()
 
-        # Build response objects
+        # Step 5: Build response objects
         food_item_responses = []
         all_vitamins: dict = {}
         all_minerals: dict = {}
@@ -242,16 +197,16 @@ async def process_meal_scan(
                 else:
                     all_minerals[m.name]["amount"] += m.amount
 
-        # Detect low nutrients
+        # Detect low nutrients (below 50% DV)
         low_nutrients = [
             name for name, d in {**all_vitamins, **all_minerals}.items() if d["dvp"] < 50
         ]
 
-        # Generate recommendations if user has a profile
+        # Step 6: Generate recommendations if user has a profile
         recommendations: list[str] = []
         try:
-            result = await db.execute(select(UserProfile).where(UserProfile.user_id == user_uuid))
-            profile = result.scalar_one_or_none()
+            result_set = await db.execute(select(UserProfile).where(UserProfile.user_id == user_id))
+            profile = result_set.scalar_one_or_none()
             if profile:
                 recommendations = generate_recommendations(
                     calories_consumed=meal.total_calories,
@@ -282,7 +237,8 @@ async def process_meal_scan(
             for n, d in all_minerals.items()
         ]
 
-        scan_response = MealScanResponse(
+        # Step 7: Return MealScanResponse
+        return MealScanResponse(
             meal_id=str(meal.id),
             meal_type=meal_type,
             image_url=image_url,
@@ -300,82 +256,11 @@ async def process_meal_scan(
             recommendations=recommendations,
         )
 
-        # Set completed state
-        await set_scan_state(
-            redis,
-            scan_id,
-            {
-                "status": "completed",
-                "user_id": user_id,
-                "meal_type": meal_type,
-                "image_url": image_url,
-                "meal_id": str(meal.id),
-                "result": scan_response.model_dump_json(),
-                "error": None,
-            },
-        )
-
-    except Exception as exc:
-        logger.error("Scan %s failed: %s\n%s", scan_id, exc, traceback.format_exc())
-        await db.rollback()
-        await set_scan_state(
-            redis,
-            scan_id,
-            {
-                "status": "failed",
-                "user_id": user_id,
-                "meal_type": meal_type,
-                "image_url": image_url,
-                "meal_id": None,
-                "result": None,
-                "error": json.dumps(
-                    {
-                        "code": "SCAN_PROCESSING_FAILED",
-                        "message": str(exc),
-                    }
-                ),
-            },
-        )
     finally:
-        for obj_name in ("recognizer", "nutrition_service"):
-            try:
-                obj = locals().get(obj_name)
-                if obj and hasattr(obj, "close"):
+        # Close HTTP clients but NOT db — the route handler owns the session lifecycle.
+        for obj in (recognizer, nutrition_service):
+            if obj is not None and hasattr(obj, "close"):
+                try:
                     await obj.close()
-            except Exception:
-                pass
-        await db.close()
-
-
-# ── ARQ WorkerSettings ───────────────────────────────────────────────────────
-
-
-class WorkerSettings:
-    """ARQ worker configuration. Run: arq app.services.scan_worker.WorkerSettings"""
-
-    functions = [process_meal_scan]
-    job_timeout = 120
-    max_jobs = 10
-    poll_delay = 0.5
-
-    @staticmethod
-    async def on_startup(ctx: dict) -> None:
-        """Initialize DB engine and Redis for the worker context."""
-        import redis.asyncio as aioredis
-
-        from app.core.config import get_settings
-        from app.core.database import get_async_session_factory
-
-        settings = get_settings()
-        ctx["redis"] = aioredis.from_url(
-            settings.redis_url,
-            encoding="utf-8",
-            decode_responses=True,
-        )
-        ctx["session_factory"] = get_async_session_factory()
-
-    @staticmethod
-    async def on_shutdown(ctx: dict) -> None:
-        """Cleanup worker context."""
-        if "redis" in ctx:
-            await ctx["redis"].aclose()
+                except Exception:
+                    pass

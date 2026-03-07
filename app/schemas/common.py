@@ -2,7 +2,7 @@
 Standard API response envelope used by all endpoints.
 """
 
-from typing import Generic, Optional, TypeVar
+from typing import Generic, TypeVar
 
 from pydantic import BaseModel
 
@@ -14,7 +14,7 @@ class ErrorDetail(BaseModel):
 
     code: str
     message: str
-    details: Optional[dict] = None
+    details: dict | None = None
 
 
 class APIResponse(BaseModel, Generic[T]):
@@ -26,8 +26,8 @@ class APIResponse(BaseModel, Generic[T]):
     """
 
     success: bool = True
-    data: Optional[T] = None
-    error: Optional[ErrorDetail] = None
+    data: T | None = None
+    error: ErrorDetail | None = None
 
     @classmethod
     def ok(cls, data: T) -> "APIResponse[T]":
@@ -37,4 +37,6 @@ class APIResponse(BaseModel, Generic[T]):
     @classmethod
     def fail(cls, code: str, message: str, details: dict | None = None) -> "APIResponse":
         """Create an error response."""
-        return cls(success=False, data=None, error=ErrorDetail(code=code, message=message, details=details))
+        return cls(
+            success=False, data=None, error=ErrorDetail(code=code, message=message, details=details)
+        )

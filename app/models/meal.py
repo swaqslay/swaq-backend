@@ -4,7 +4,7 @@ SQLAlchemy ORM models for Meal and MealFoodItem tables.
 
 import uuid
 from datetime import datetime
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Index, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -28,9 +28,11 @@ class Meal(Base):
     user_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
     )
-    meal_type: Mapped[str] = mapped_column(String(20), nullable=False)  # breakfast/lunch/dinner/snack
-    image_url: Mapped[Optional[str]] = mapped_column(String(500))
-    notes: Mapped[Optional[str]] = mapped_column(Text)
+    meal_type: Mapped[str] = mapped_column(
+        String(20), nullable=False
+    )  # breakfast/lunch/dinner/snack
+    image_url: Mapped[str | None] = mapped_column(String(500))
+    notes: Mapped[str | None] = mapped_column(Text)
 
     # Aggregated totals (denormalized for fast dashboard queries)
     total_calories: Mapped[float] = mapped_column(Float, default=0)
@@ -40,8 +42,8 @@ class Meal(Base):
     total_fiber_g: Mapped[float] = mapped_column(Float, default=0)
 
     # AI metadata
-    ai_provider: Mapped[Optional[str]] = mapped_column(String(20))   # gemini, openrouter
-    ai_model: Mapped[Optional[str]] = mapped_column(String(100))
+    ai_provider: Mapped[str | None] = mapped_column(String(20))  # gemini, openrouter
+    ai_model: Mapped[str | None] = mapped_column(String(100))
     ai_confidence_avg: Mapped[float] = mapped_column(Float, default=0)
 
     is_manually_edited: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -86,7 +88,7 @@ class MealFoodItem(Base):
     minerals: Mapped[dict] = mapped_column(JSON, default=dict)
 
     # USDA reference (if matched)
-    usda_fdc_id: Mapped[Optional[int]] = mapped_column()
+    usda_fdc_id: Mapped[int | None] = mapped_column()
 
     # Relationship
     meal: Mapped["Meal"] = relationship(back_populates="food_items")

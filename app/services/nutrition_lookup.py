@@ -27,7 +27,15 @@ settings = get_settings()
 USDA_BASE_URL = "https://api.nal.usda.gov/fdc/v1"
 
 # Vitamin/mineral keys and their USDA nutrient IDs
-VITAMIN_KEYS = ["vitamin_a", "vitamin_c", "vitamin_d", "vitamin_b6", "vitamin_b12", "folate", "vitamin_e"]
+VITAMIN_KEYS = [
+    "vitamin_a",
+    "vitamin_c",
+    "vitamin_d",
+    "vitamin_b6",
+    "vitamin_b12",
+    "folate",
+    "vitamin_e",
+]
 MINERAL_KEYS = ["calcium", "iron", "magnesium", "potassium", "sodium", "zinc"]
 
 
@@ -98,7 +106,11 @@ class NutritionLookup:
                     # Re-warm Redis
                     if redis:
                         try:
-                            await redis.set(cache_key, json.dumps(cached_row.nutrition_data), ex=REDIS_TTL_NUTRITION)
+                            await redis.set(
+                                cache_key,
+                                json.dumps(cached_row.nutrition_data),
+                                ex=REDIS_TTL_NUTRITION,
+                            )
                         except Exception:
                             pass
                     return self._scale_to_portion(cached_row.nutrition_data, weight_g)
@@ -281,13 +293,17 @@ class NutritionLookup:
             result["vitamins"][key] = {
                 "amount": round(v.get("amount", 0) * factor, 2),
                 "unit": v.get("unit", "mg"),
-                "dv_percent": round(v.get("dv_percent", 0) * factor, 1) if v.get("dv_percent") else None,
+                "dv_percent": round(v.get("dv_percent", 0) * factor, 1)
+                if v.get("dv_percent")
+                else None,
             }
         for key, m in per_100g_data.get("minerals", {}).items():
             result["minerals"][key] = {
                 "amount": round(m.get("amount", 0) * factor, 2),
                 "unit": m.get("unit", "mg"),
-                "dv_percent": round(m.get("dv_percent", 0) * factor, 1) if m.get("dv_percent") else None,
+                "dv_percent": round(m.get("dv_percent", 0) * factor, 1)
+                if m.get("dv_percent")
+                else None,
             }
         return result
 
@@ -313,7 +329,9 @@ class NutritionLookup:
             try:
                 # Upsert — update if exists, insert if not
                 result = await db.execute(
-                    select(NutritionCache).where(NutritionCache.food_name_normalized == normalized_name)
+                    select(NutritionCache).where(
+                        NutritionCache.food_name_normalized == normalized_name
+                    )
                 )
                 existing = result.scalar_one_or_none()
                 if existing:
@@ -322,12 +340,14 @@ class NutritionLookup:
                     if fdc_id:
                         existing.usda_fdc_id = fdc_id
                 else:
-                    db.add(NutritionCache(
-                        food_name_normalized=normalized_name,
-                        usda_fdc_id=fdc_id,
-                        nutrition_data=data,
-                        source=source,
-                    ))
+                    db.add(
+                        NutritionCache(
+                            food_name_normalized=normalized_name,
+                            usda_fdc_id=fdc_id,
+                            nutrition_data=data,
+                            source=source,
+                        )
+                    )
                 await db.flush()
             except Exception as exc:
                 logger.warning(f"DB cache store failed: {exc}")

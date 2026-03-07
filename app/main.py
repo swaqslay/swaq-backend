@@ -39,8 +39,12 @@ async def lifespan(app: FastAPI):
     logger.info(f"Gemini API   : {'✓ configured' if settings.gemini_api_key else '✗ NOT SET'}")
     logger.info(f"OpenRouter   : {'✓ configured' if settings.openrouter_api_key else '✗ NOT SET'}")
     logger.info(f"USDA API     : {'✓ configured' if settings.usda_api_key else '✗ NOT SET'}")
-    logger.info(f"Redis        : {'✓ configured' if settings.redis_url else '✗ not set (caching disabled)'}")
-    logger.info(f"R2 Storage   : {'✓ configured' if settings.cloudflare_r2_endpoint else '✗ not set (images not stored)'}")
+    logger.info(
+        f"Redis        : {'✓ configured' if settings.redis_url else '✗ not set (caching disabled)'}"
+    )
+    logger.info(
+        f"R2 Storage   : {'✓ configured' if settings.cloudflare_r2_endpoint else '✗ not set (images not stored)'}"
+    )
 
     try:
         await init_db()
@@ -52,25 +56,10 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.error(f"Failed to initialize Redis: {exc}")
 
-    # ARQ pool for enqueuing scan jobs
-    arq_pool = None
-    if settings.redis_url:
-        try:
-            from arq import create_pool
-            from arq.connections import RedisSettings
-
-            arq_pool = await create_pool(RedisSettings.from_dsn(settings.redis_url))
-            logger.info("ARQ job pool connected.")
-        except Exception as exc:
-            logger.warning(f"ARQ pool failed to connect: {exc}")
-    app.state.arq_pool = arq_pool
-
     logger.info("Startup sequence complete.")
 
     yield  # Application is running
 
-    if getattr(app.state, "arq_pool", None):
-        await app.state.arq_pool.close()
     await close_redis()
     logger.info("Shutdown complete.")
 

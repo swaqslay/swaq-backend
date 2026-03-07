@@ -8,19 +8,19 @@ FREE_DAILY_SCAN_LIMIT = 3
 
 # Activity level multipliers for TDEE (Mifflin-St Jeor)
 ACTIVITY_MULTIPLIERS: dict[str, float] = {
-    "sedentary": 1.2,      # Desk job, no exercise
-    "light": 1.375,        # Light exercise 1-3 days/week
-    "moderate": 1.55,      # Moderate exercise 3-5 days/week
-    "active": 1.725,       # Hard exercise 6-7 days/week
-    "very_active": 1.9,    # Athlete / physical labor
+    "sedentary": 1.2,  # Desk job, no exercise
+    "light": 1.375,  # Light exercise 1-3 days/week
+    "moderate": 1.55,  # Moderate exercise 3-5 days/week
+    "active": 1.725,  # Hard exercise 6-7 days/week
+    "very_active": 1.9,  # Athlete / physical labor
 }
 
 # Calorie adjustments based on health goal
 GOAL_CALORIE_ADJUSTMENTS: dict[str, int] = {
-    "lose_weight": -500,   # ~0.5 kg/week loss
+    "lose_weight": -500,  # ~0.5 kg/week loss
     "maintain": 0,
-    "gain_weight": 300,    # Lean bulk
-    "build_muscle": 400,   # Muscle building surplus
+    "gain_weight": 300,  # Lean bulk
+    "build_muscle": 400,  # Muscle building surplus
 }
 
 # Macro percentage splits per goal (protein%, carbs%, fat%)
@@ -57,27 +57,27 @@ USDA_NUTRIENT_IDS: dict[str, int] = {
     "carbs": 1005,
     "fiber": 1079,
     "sugar": 2000,
-    "vitamin_a": 1106,    # mcg RAE
-    "vitamin_c": 1162,    # mg
-    "vitamin_d": 1114,    # mcg
-    "vitamin_b6": 1175,   # mg
+    "vitamin_a": 1106,  # mcg RAE
+    "vitamin_c": 1162,  # mg
+    "vitamin_d": 1114,  # mcg
+    "vitamin_b6": 1175,  # mg
     "vitamin_b12": 1178,  # mcg
-    "folate": 1177,       # mcg
-    "vitamin_e": 1109,    # mg
-    "vitamin_k": 1185,    # mcg
-    "calcium": 1087,      # mg
-    "iron": 1089,         # mg
-    "magnesium": 1090,    # mg
-    "potassium": 1092,    # mg
-    "sodium": 1093,       # mg
-    "zinc": 1095,         # mg
+    "folate": 1177,  # mcg
+    "vitamin_e": 1109,  # mg
+    "vitamin_k": 1185,  # mcg
+    "calcium": 1087,  # mg
+    "iron": 1089,  # mg
+    "magnesium": 1090,  # mg
+    "potassium": 1092,  # mg
+    "sodium": 1093,  # mg
+    "zinc": 1095,  # mg
 }
 
 # Redis cache TTLs in seconds
-REDIS_TTL_NUTRITION = 7 * 24 * 3600   # 7 days
-REDIS_TTL_USDA_SEARCH = 24 * 3600     # 24 hours
-REDIS_TTL_DAILY_SUMMARY = 3600        # 1 hour
-REDIS_TTL_RATE_LIMIT = 60             # 60 seconds
+REDIS_TTL_NUTRITION = 7 * 24 * 3600  # 7 days
+REDIS_TTL_USDA_SEARCH = 24 * 3600  # 24 hours
+REDIS_TTL_DAILY_SUMMARY = 3600  # 1 hour
+REDIS_TTL_RATE_LIMIT = 60  # 60 seconds
 
 # Image constraints
 MAX_IMAGE_SIZE_BYTES = 10 * 1024 * 1024  # 10 MB

@@ -5,7 +5,6 @@ Meal service: all meal CRUD operations and DB persistence logic.
 import logging
 import uuid
 from datetime import date, datetime, timedelta, timezone
-from typing import Optional
 
 from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -39,8 +38,8 @@ async def create_meal(
     food_items_data: list[dict],
     ai_provider: str,
     ai_model: str,
-    image_url: Optional[str],
-    notes: Optional[str],
+    image_url: str | None,
+    notes: str | None,
     db: AsyncSession,
 ) -> Meal:
     """
@@ -242,11 +241,15 @@ def build_meal_detail_response(meal: Meal) -> MealDetailResponse:
 
     for item in meal.food_items:
         vitamins = [
-            NutrientInfo(name=k, amount=v["amount"], unit=v["unit"], daily_value_percent=v.get("dv_percent"))
+            NutrientInfo(
+                name=k, amount=v["amount"], unit=v["unit"], daily_value_percent=v.get("dv_percent")
+            )
             for k, v in (item.vitamins or {}).items()
         ]
         minerals = [
-            NutrientInfo(name=k, amount=v["amount"], unit=v["unit"], daily_value_percent=v.get("dv_percent"))
+            NutrientInfo(
+                name=k, amount=v["amount"], unit=v["unit"], daily_value_percent=v.get("dv_percent")
+            )
             for k, v in (item.minerals or {}).items()
         ]
 
@@ -272,19 +275,37 @@ def build_meal_detail_response(meal: Meal) -> MealDetailResponse:
             if v.name in all_vitamins:
                 all_vitamins[v.name]["amount"] += v.amount
             else:
-                all_vitamins[v.name] = {"amount": v.amount, "unit": v.unit, "dvp": v.daily_value_percent or 0}
+                all_vitamins[v.name] = {
+                    "amount": v.amount,
+                    "unit": v.unit,
+                    "dvp": v.daily_value_percent or 0,
+                }
         for m in minerals:
             if m.name in all_minerals:
                 all_minerals[m.name]["amount"] += m.amount
             else:
-                all_minerals[m.name] = {"amount": m.amount, "unit": m.unit, "dvp": m.daily_value_percent or 0}
+                all_minerals[m.name] = {
+                    "amount": m.amount,
+                    "unit": m.unit,
+                    "dvp": m.daily_value_percent or 0,
+                }
 
     vitamins_summary = [
-        NutrientInfo(name=n, amount=round(d["amount"], 1), unit=d["unit"], daily_value_percent=round(d["dvp"], 1))
+        NutrientInfo(
+            name=n,
+            amount=round(d["amount"], 1),
+            unit=d["unit"],
+            daily_value_percent=round(d["dvp"], 1),
+        )
         for n, d in all_vitamins.items()
     ]
     minerals_summary = [
-        NutrientInfo(name=n, amount=round(d["amount"], 1), unit=d["unit"], daily_value_percent=round(d["dvp"], 1))
+        NutrientInfo(
+            name=n,
+            amount=round(d["amount"], 1),
+            unit=d["unit"],
+            daily_value_percent=round(d["dvp"], 1),
+        )
         for n, d in all_minerals.items()
     ]
 

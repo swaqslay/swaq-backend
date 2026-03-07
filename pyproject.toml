@@ -36,8 +36,6 @@ dependencies = [
     "boto3>=1.35.0",            # Cloudflare R2 (S3-compatible)
     # Multipart uploads
     "python-multipart>=0.0.20",
-    # Task queue
-    "arq>=0.26",
 ]
 
 [project.optional-dependencies]

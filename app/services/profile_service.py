@@ -4,13 +4,12 @@ Profile service: create/update user profiles with BMI/BMR/TDEE calculations.
 
 import logging
 import uuid
-from typing import Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import profile_not_found
-from app.models.user import User, UserProfile
+from app.models.user import UserProfile
 from app.schemas.user import ProfileCreate, ProfileResponse, ProfileUpdate
 from app.services.bmi_calculator import calculate_daily_targets
 

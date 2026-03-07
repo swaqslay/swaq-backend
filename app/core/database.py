@@ -43,15 +43,17 @@ class Base(DeclarativeBase):
 # ═════════════════════════════════════════════════════════════════════════════
 
 if _IS_VERCEL:
-    from sqlalchemy.pool import NullPool
     from psycopg import ClientCursor
+    from sqlalchemy.pool import NullPool
 
     _sync_url = _normalize_url(settings.database_url).replace(
         "postgresql://", "postgresql+psycopg://", 1
     )
     host_part = _sync_url.split("@")[-1] if "@" in _sync_url else _sync_url
     logger.info("ENVIRONMENT: Vercel serverless")
-    logger.info(f"DATABASE: PostgreSQL (Supabase) Host: {host_part} Driver: psycopg (sync-in-thread)")
+    logger.info(
+        f"DATABASE: PostgreSQL (Supabase) Host: {host_part} Driver: psycopg (sync-in-thread)"
+    )
 
     _sync_engine = create_engine(
         _sync_url,
@@ -119,9 +121,11 @@ if _IS_VERCEL:
     async def init_db() -> None:
         """Verify DB connection using sync engine in a thread."""
         loop = asyncio.get_event_loop()
+
         def _check():
             with _sync_engine.connect() as conn:
                 conn.execute(__import__("sqlalchemy").text("SELECT 1"))
+
         await loop.run_in_executor(None, _check)
         logger.info("Database connection verified (sync-in-thread).")
 

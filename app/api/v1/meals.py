@@ -1,30 +1,22 @@
 """
-Meal endpoints — THIN controllers, all logic in meal_service / scan_worker.
-POST   /api/v1/meals/scan             - Upload photo → enqueue async scan → return scan_id
-GET    /api/v1/meals/scan/{scan_id}/status - Poll scan progress
+Meal endpoints — THIN controllers, all logic in meal_service / scan_processor.
+POST   /api/v1/meals/scan             - Upload photo → inline AI scan → return full result
+GET    /api/v1/meals/scan/{scan_id}/status - Deprecated: scans now complete inline
 GET    /api/v1/meals/history          - Meal history for a date
 GET    /api/v1/meals/{meal_id}        - Single meal detail
 PATCH  /api/v1/meals/{meal_id}/items/{item_id} - Manual correction
 DELETE /api/v1/meals/{meal_id}        - Delete meal
 """
 
-import base64
-import json
 import logging
 import uuid
 
 from fastapi import APIRouter, Depends, File, Form, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_arq_pool, get_current_active_user
+from app.api.deps import get_current_active_user
 from app.core.database import get_db
-from app.core.exceptions import (
-    ServiceUnavailableError,
-    meal_image_invalid,
-    meal_image_too_large,
-    premium_required,
-    scan_not_found,
-)
+from app.core.exceptions import meal_image_invalid, meal_image_too_large, premium_required
 from app.core.redis import get_redis
 from app.models.user import User
 from app.schemas.common import APIResponse
@@ -33,12 +25,10 @@ from app.schemas.meal import (
     MealHistoryResponse,
     MealItemUpdate,
     MealScanResponse,
-    ScanStatusResponse,
-    ScanSubmitResponse,
 )
 from app.services import meal_service
 from app.services.image_storage import upload_image
-from app.services.scan_worker import get_scan_state, set_scan_state
+from app.services.scan_processor import process_scan_inline
 from app.utils.constants import ALLOWED_IMAGE_TYPES, MAX_IMAGE_SIZE_BYTES
 from app.utils.helpers import get_today_utc, parse_date
 
@@ -46,7 +36,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/meals", tags=["Meals"])
 
 
-@router.post("/scan", response_model=APIResponse[ScanSubmitResponse], status_code=201)
+@router.post("/scan", response_model=APIResponse[MealScanResponse], status_code=201)
 async def scan_meal(
     image: UploadFile = File(..., description="Food photo (JPEG/PNG/WebP, max 10MB)"),
     meal_type: str = Form(default="snack", description="breakfast, lunch, dinner, snack"),
@@ -54,27 +44,18 @@ async def scan_meal(
     current_user: User = Depends(get_current_active_user),
     db: AsyncSession = Depends(get_db),
     redis=Depends(get_redis),
-    arq_pool=Depends(get_arq_pool),
-) -> APIResponse[ScanSubmitResponse]:
+) -> APIResponse[MealScanResponse]:
     """
-    Upload a food photo and enqueue async AI analysis.
-
-    Returns a scan_id immediately. Poll GET /scan/{scan_id}/status for results.
+    Upload a food photo for AI analysis. Returns full nutrition breakdown inline.
 
     Flow:
     1. Validate image
     2. Check premium scan limit (3/day for free users)
     3. Upload to storage (optional — gracefully skipped if not configured)
-    4. Enqueue ARQ job for background processing
-    5. Return scan_id + poll_url
+    4. AI recognition + nutrition estimation (inline)
+    5. Return full MealScanResponse
     """
-    # ── 1. Require Redis + ARQ ────────────────────────────────────────────────
-    if redis is None or arq_pool is None:
-        raise ServiceUnavailableError(
-            "Redis is required for meal scanning.", "REDIS_UNAVAILABLE"
-        )
-
-    # ── 2. Validate image ─────────────────────────────────────────────────────
+    # ── 1. Validate image ─────────────────────────────────────────────────────
     if image.content_type not in ALLOWED_IMAGE_TYPES:
         raise meal_image_invalid()
 
@@ -82,7 +63,7 @@ async def scan_meal(
     if len(image_bytes) > MAX_IMAGE_SIZE_BYTES:
         raise meal_image_too_large()
 
-    # ── 3. Premium gate ───────────────────────────────────────────────────────
+    # ── 2. Premium gate ───────────────────────────────────────────────────────
     if not current_user.is_premium:
         from app.core.config import get_settings
 
@@ -91,76 +72,36 @@ async def scan_meal(
         if today_count >= settings.free_daily_scan_limit:
             raise premium_required()
 
-    # ── 4. Upload to storage ──────────────────────────────────────────────────
+    # ── 3. Upload to storage ──────────────────────────────────────────────────
     image_url = await upload_image(str(current_user.id), image_bytes, image.content_type)
 
-    # ── 5. Generate scan_id and store initial state ───────────────────────────
-    scan_id = str(uuid.uuid4())
-    await set_scan_state(redis, scan_id, {
-        "status": "pending",
-        "user_id": str(current_user.id),
-        "meal_type": meal_type,
-        "image_url": image_url,
-        "meal_id": None,
-        "result": None,
-        "error": None,
-    })
-
-    # ── 6. Enqueue ARQ job ────────────────────────────────────────────────────
-    await arq_pool.enqueue_job(
-        "process_meal_scan",
-        scan_id,
-        base64.b64encode(image_bytes).decode(),
-        image.content_type,
-        str(current_user.id),
-        meal_type,
-        notes or None,
-        image_url,
+    # ── 4. Inline processing ──────────────────────────────────────────────────
+    result = await process_scan_inline(
+        image_bytes=image_bytes,
+        content_type=image.content_type,
+        user_id=current_user.id,
+        meal_type=meal_type,
+        notes=notes or None,
+        image_url=image_url,
+        db=db,
+        redis=redis,
     )
-
-    poll_url = f"/api/v1/meals/scan/{scan_id}/status"
-    return APIResponse.ok(
-        ScanSubmitResponse(scan_id=scan_id, status="pending", poll_url=poll_url)
-    )
+    return APIResponse.ok(result)
 
 
-@router.get("/scan/{scan_id}/status", response_model=APIResponse[ScanStatusResponse])
+@router.get("/scan/{scan_id}/status", response_model=APIResponse[dict], deprecated=True)
 async def get_scan_status(
     scan_id: str,
     current_user: User = Depends(get_current_active_user),
-    redis=Depends(get_redis),
-) -> APIResponse[ScanStatusResponse]:
-    """Poll the status of an async meal scan."""
-    if redis is None:
-        raise ServiceUnavailableError(
-            "Redis is required for scan status.", "REDIS_UNAVAILABLE"
-        )
-
-    state = await get_scan_state(redis, scan_id)
-    if state is None:
-        raise scan_not_found()
-
-    # Security: only the scan owner can poll
-    if state.get("user_id") != str(current_user.id):
-        raise scan_not_found()
-
-    # Parse result/error from JSON strings if present
-    result_data = None
-    if state.get("result"):
-        result_data = MealScanResponse.model_validate_json(state["result"])
-
-    error_data = None
-    if state.get("error"):
-        error_data = json.loads(state["error"])
-
-    response = ScanStatusResponse(
-        scan_id=scan_id,
-        status=state["status"],
-        meal_id=state.get("meal_id"),
-        result=result_data,
-        error=error_data,
+) -> APIResponse[dict]:
+    """Deprecated: scans now complete inline. This endpoint is no longer needed."""
+    return APIResponse.ok(
+        {
+            "message": "Scans now complete inline with POST /meals/scan. "
+            "This polling endpoint is deprecated.",
+            "scan_id": scan_id,
+        }
     )
-    return APIResponse.ok(response)
 
 
 @router.get("/history", response_model=APIResponse[MealHistoryResponse])

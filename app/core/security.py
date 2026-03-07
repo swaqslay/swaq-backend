@@ -3,7 +3,6 @@ JWT token creation/verification and bcrypt password hashing.
 """
 
 from datetime import datetime, timedelta, timezone
-from typing import Optional
 
 from jose import JWTError, jwt
 from passlib.context import CryptContext
@@ -94,8 +93,8 @@ def verify_token(token: str, expected_type: str) -> str:
             algorithms=[settings.jwt_algorithm],
             options={"verify_iss": False},
         )
-        user_id: Optional[str] = payload.get("sub")
-        token_type: Optional[str] = payload.get("type")
+        user_id: str | None = payload.get("sub")
+        token_type: str | None = payload.get("type")
 
         if user_id is None:
             raise auth_token_invalid()

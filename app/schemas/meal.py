@@ -82,24 +82,6 @@ class MealHistoryResponse(BaseModel):
     daily_totals: dict
 
 
-class ScanSubmitResponse(BaseModel):
-    """Response for POST /meals/scan — immediate acknowledgement."""
-
-    scan_id: str
-    status: str  # always "pending"
-    poll_url: str
-
-
-class ScanStatusResponse(BaseModel):
-    """Response for GET /meals/scan/{scan_id}/status — polling result."""
-
-    scan_id: str
-    status: str  # pending | processing | completed | failed
-    meal_id: str | None = None
-    result: MealScanResponse | None = None
-    error: dict | None = None
-
-
 class MealItemUpdate(BaseModel):
     """Request body for PATCH /meals/{id}/items/{item_id}."""
 

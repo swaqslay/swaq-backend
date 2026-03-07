@@ -150,9 +150,7 @@ class AIFoodRecognizer:
         if not raw_items:
             return recognition
         nutrition_result = await self.estimate_nutrition(raw_items)
-        nutrition_items = (
-            nutrition_result.get("food_items", []) if nutrition_result else raw_items
-        )
+        nutrition_items = nutrition_result.get("food_items", []) if nutrition_result else raw_items
         recognition["food_items"] = nutrition_items
         return recognition
 
@@ -195,7 +193,9 @@ class AIFoodRecognizer:
         try:
             result = await self._analyze_with_openrouter(processed_bytes, processed_mime)
             if result:
-                logger.info(f"Food recognition succeeded via OpenRouter ({result.get('_ai_model')})")
+                logger.info(
+                    f"Food recognition succeeded via OpenRouter ({result.get('_ai_model')})"
+                )
                 return result
         except Exception as exc:
             logger.error(f"All OpenRouter vision models failed: {exc}")
@@ -252,7 +252,11 @@ class AIFoodRecognizer:
             "contents": [
                 {
                     "parts": [
-                        {"text": FOOD_RECOGNITION_SYSTEM_PROMPT + "\n\n" + FOOD_RECOGNITION_USER_PROMPT},
+                        {
+                            "text": FOOD_RECOGNITION_SYSTEM_PROMPT
+                            + "\n\n"
+                            + FOOD_RECOGNITION_USER_PROMPT
+                        },
                         {"inline_data": {"mime_type": mime_type, "data": b64_image}},
                     ]
                 }
@@ -315,7 +319,9 @@ class AIFoodRecognizer:
                 "content": [
                     {
                         "type": "text",
-                        "text": FOOD_RECOGNITION_SYSTEM_PROMPT + "\n\n" + FOOD_RECOGNITION_USER_PROMPT
+                        "text": FOOD_RECOGNITION_SYSTEM_PROMPT
+                        + "\n\n"
+                        + FOOD_RECOGNITION_USER_PROMPT,
                     },
                     {"type": "image_url", "image_url": {"url": image_data_url}},
                 ],
@@ -412,9 +418,7 @@ class AIFoodRecognizer:
         text = data["candidates"][0]["content"]["parts"][0]["text"]
         return self._parse_json_response(text)
 
-    async def _combined_openrouter(
-        self, image_bytes: bytes, mime_type: str
-    ) -> dict | None:
+    async def _combined_openrouter(self, image_bytes: bytes, mime_type: str) -> dict | None:
         """Single OpenRouter call for recognition + nutrition."""
         if not settings.openrouter_api_key:
             logger.debug("OPENROUTER_API_KEY not set, skipping OpenRouter combined")
@@ -457,9 +461,7 @@ class AIFoodRecognizer:
                         result["_ai_model"] = model
                         return result
                 except Exception as exc:
-                    logger.warning(
-                        f"OpenRouter combined model '{model}' failed: {exc}"
-                    )
+                    logger.warning(f"OpenRouter combined model '{model}' failed: {exc}")
 
         return None
 
@@ -524,7 +526,7 @@ class AIFoodRecognizer:
             # Find last complete JSON element delimiter
             repaired = cleaned.rstrip()
             # Remove trailing partial tokens: partial strings, numbers, etc.
-            while repaired and repaired[-1] not in "{}[],\"0123456789":
+            while repaired and repaired[-1] not in '{}[],"0123456789':
                 repaired = repaired[:-1]
             # If ends mid-string, remove back to the opening quote of that string
             # and the key before it (best-effort)

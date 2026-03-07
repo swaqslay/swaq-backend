@@ -3,7 +3,6 @@ Recommendation engine: generates personalized dietary advice based on
 intake vs targets and micronutrient gaps.
 """
 
-
 NUTRIENT_SUGGESTIONS: dict[str, str] = {
     "Iron": "Try spinach, lentils, or red meat.",
     "Calcium": "Add milk, curd, paneer, or ragi.",

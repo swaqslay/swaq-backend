@@ -4,7 +4,6 @@ Provides an async context manager and a global client for the app lifespan.
 """
 
 import logging
-from typing import Optional
 
 import redis.asyncio as aioredis
 
@@ -14,7 +13,7 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 # Module-level client — initialized in app lifespan
-_redis_client: Optional[aioredis.Redis] = None
+_redis_client: aioredis.Redis | None = None
 
 
 async def init_redis() -> None:
@@ -48,7 +47,7 @@ async def close_redis() -> None:
         logger.info("Redis connection closed.")
 
 
-def get_redis() -> Optional[aioredis.Redis]:
+def get_redis() -> aioredis.Redis | None:
     """
     FastAPI dependency: yields the Redis client (or None if unavailable).
     Services must handle None gracefully — Redis is optional for correctness,

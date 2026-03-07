@@ -33,7 +33,9 @@ class User(Base):
 
     # Relationships
     profile: Mapped[Optional["UserProfile"]] = relationship(back_populates="user", uselist=False)
-    meals: Mapped[list["Meal"]] = relationship(back_populates="user", order_by="Meal.created_at.desc()")
+    meals: Mapped[list["Meal"]] = relationship(
+        back_populates="user", order_by="Meal.created_at.desc()"
+    )
 
 
 class UserProfile(Base):

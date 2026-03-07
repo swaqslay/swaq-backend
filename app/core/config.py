@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     def effective_app_env(self) -> str:
         """Force production mode on Vercel."""
         import os
+
         if "VERCEL" in os.environ:
             return "production"
         return self.app_env
@@ -54,11 +55,11 @@ class Settings(BaseSettings):
     redis_url: str = ""
 
     # ── Backblaze B2 (active image storage) ──────────────────────────────────
-    backblaze_b2_endpoint: str = ""       # e.g. https://s3.us-west-004.backblazeb2.com
-    backblaze_b2_access_key: str = ""     # Application Key ID
-    backblaze_b2_secret_key: str = ""     # Application Key
+    backblaze_b2_endpoint: str = ""  # e.g. https://s3.us-west-004.backblazeb2.com
+    backblaze_b2_access_key: str = ""  # Application Key ID
+    backblaze_b2_secret_key: str = ""  # Application Key
     backblaze_b2_bucket: str = "swaq-images"
-    backblaze_b2_region: str = ""         # e.g. us-west-004
+    backblaze_b2_region: str = ""  # e.g. us-west-004
 
     # ── Cloudflare R2 (reserved for future use) ───────────────────────────────
     cloudflare_r2_endpoint: str = ""
@@ -76,7 +77,7 @@ class Settings(BaseSettings):
         return self.effective_app_env == "production"
 
 
-@lru_cache()
+@lru_cache
 def get_settings() -> Settings:
     """Return cached settings instance."""
     return Settings()

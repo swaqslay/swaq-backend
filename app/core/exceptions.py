@@ -10,7 +10,9 @@ from fastapi.responses import JSONResponse
 class SwaqError(Exception):
     """Base exception. All custom errors extend this."""
 
-    def __init__(self, message: str, code: str, status_code: int = 500, details: dict | None = None):
+    def __init__(
+        self, message: str, code: str, status_code: int = 500, details: dict | None = None
+    ):
         super().__init__(message)
         self.message = message
         self.code = code
@@ -49,7 +51,11 @@ class NotFoundError(SwaqError):
 class RateLimitError(SwaqError):
     """429 — Too many requests."""
 
-    def __init__(self, message: str = "Too many requests. Please slow down.", code: str = "RATE_LIMIT_EXCEEDED"):
+    def __init__(
+        self,
+        message: str = "Too many requests. Please slow down.",
+        code: str = "RATE_LIMIT_EXCEEDED",
+    ):
         super().__init__(message, code, 429)
 
 
@@ -63,11 +69,14 @@ class AIProviderError(SwaqError):
 class ServiceUnavailableError(SwaqError):
     """503 — All providers exhausted or service unavailable."""
 
-    def __init__(self, message: str = "Service temporarily unavailable.", code: str = "SERVICE_UNAVAILABLE"):
+    def __init__(
+        self, message: str = "Service temporarily unavailable.", code: str = "SERVICE_UNAVAILABLE"
+    ):
         super().__init__(message, code, 503)
 
 
 # ── Pre-built instances for common cases ──────────────────────────────────────
+
 
 def auth_invalid_credentials() -> AuthenticationError:
     return AuthenticationError("Invalid email or password.", "AUTH_INVALID_CREDENTIALS")
@@ -86,7 +95,9 @@ def auth_email_exists() -> ValidationError:
 
 
 def profile_not_found() -> NotFoundError:
-    return NotFoundError("Profile not found. Please create your profile first.", "PROFILE_NOT_FOUND")
+    return NotFoundError(
+        "Profile not found. Please create your profile first.", "PROFILE_NOT_FOUND"
+    )
 
 
 def meal_not_found() -> NotFoundError:
@@ -134,6 +145,7 @@ def premium_required() -> ForbiddenError:
 
 # ── FastAPI exception handlers ─────────────────────────────────────────────────
 
+
 async def swaq_error_handler(request: Request, exc: SwaqError) -> JSONResponse:
     """Global handler for all SwaqError subclasses."""
     return JSONResponse(
@@ -153,6 +165,7 @@ async def swaq_error_handler(request: Request, exc: SwaqError) -> JSONResponse:
 async def unhandled_error_handler(request: Request, exc: Exception) -> JSONResponse:
     """Catch-all for unexpected server errors."""
     import logging
+
     logging.getLogger(__name__).exception("Unhandled error: %s", exc)
     return JSONResponse(
         status_code=500,

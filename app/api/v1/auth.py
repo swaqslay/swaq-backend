@@ -41,7 +41,9 @@ router = APIRouter(prefix="/auth", tags=["Auth"])
 
 
 @router.post("/register", response_model=APIResponse[AuthResponse], status_code=201)
-async def register(data: UserRegister, db: AsyncSession = Depends(get_db)) -> APIResponse[AuthResponse]:
+async def register(
+    data: UserRegister, db: AsyncSession = Depends(get_db)
+) -> APIResponse[AuthResponse]:
     """
     Create a new user account.
 
