@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, File, Form, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_active_user
+from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.exceptions import meal_image_invalid, meal_image_too_large, premium_required
 from app.core.redis import get_redis
@@ -33,6 +34,7 @@ from app.utils.constants import ALLOWED_IMAGE_TYPES, MAX_IMAGE_SIZE_BYTES
 from app.utils.helpers import get_today_utc, parse_date
 
 logger = logging.getLogger(__name__)
+settings = get_settings()
 router = APIRouter(prefix="/meals", tags=["Meals"])
 
 
@@ -65,9 +67,6 @@ async def scan_meal(
 
     # ── 2. Premium gate ───────────────────────────────────────────────────────
     if not current_user.is_premium:
-        from app.core.config import get_settings
-
-        settings = get_settings()
         today_count = await meal_service.count_today_scans(current_user.id, db)
         if today_count >= settings.free_daily_scan_limit:
             raise premium_required()

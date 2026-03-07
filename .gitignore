@@ -51,3 +51,7 @@ alembic/versions/*.pyc
 # Agent workflow — working files (not committed)
 .handoff/
 .noindex/
+
+
+# gemini.py
+gemini.py

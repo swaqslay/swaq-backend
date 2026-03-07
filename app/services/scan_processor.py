@@ -134,13 +134,15 @@ async def process_scan_inline(
             db=db,
         )
         await db.commit()
+        await db.refresh(meal, attribute_names=["food_items"])
 
         # Step 5: Build response objects
         food_item_responses = []
         all_vitamins: dict = {}
         all_minerals: dict = {}
 
-        for item_data in enriched_items:
+        for i, item_data in enumerate(enriched_items):
+            db_item = meal.food_items[i]
             vitamins = [
                 NutrientInfo(
                     name=k,
@@ -162,7 +164,7 @@ async def process_scan_inline(
 
             food_item_responses.append(
                 FoodItemResponse(
-                    id=str(uuid.uuid4()),
+                    id=str(db_item.id),
                     name=item_data["name"],
                     confidence=item_data["confidence"],
                     estimated_portion=item_data["estimated_portion"],

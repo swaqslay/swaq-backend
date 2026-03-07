@@ -6,7 +6,8 @@ Used via Depends() in route handlers.
 import logging
 import uuid
 
-from fastapi import Depends, Header
+from fastapi import Depends, Security
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,9 +18,10 @@ from app.models.user import User
 
 logger = logging.getLogger(__name__)
 
+bearer_scheme = HTTPBearer(auto_error=False)
 
 async def get_current_user(
-    authorization: str | None = Header(None),
+    credentials: HTTPAuthorizationCredentials = Security(bearer_scheme),
     db: AsyncSession = Depends(get_db),
 ) -> User:
     """
@@ -29,10 +31,10 @@ async def get_current_user(
     Raises:
         AuthenticationError: If header is missing, token is invalid, or user not found.
     """
-    if not authorization or not authorization.startswith("Bearer "):
+    if not credentials or credentials.scheme.lower() != "bearer":
         raise auth_token_invalid()
 
-    token = authorization.removeprefix("Bearer ").strip()
+    token = credentials.credentials
     user_id_str = verify_token(token, expected_type=ACCESS_TOKEN_TYPE)
 
     try:

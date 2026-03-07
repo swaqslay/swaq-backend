@@ -33,46 +33,28 @@ MOCK_NUTRITION_RESULT = {
 
 
 @pytest.mark.asyncio
-async def test_gemini_success():
+async def test_groq_success():
     recognizer = AIFoodRecognizer()
     with (
         patch("app.services.ai_food_recognizer.preprocess_image", return_value=(b"processed", "image/jpeg")),
-        patch.object(recognizer, "_analyze_with_gemini", new_callable=AsyncMock) as mock,
+        patch.object(recognizer, "_analyze_with_groq", new_callable=AsyncMock) as mock,
     ):
         mock.return_value = MOCK_RECOGNITION_RESULT
         result = await recognizer.analyze_food_image(b"fake_image_bytes", "image/jpeg")
-    assert result["_ai_provider"] == "gemini"
-    assert result["_ai_model"] == "gemini-2.0-flash"
+    
+    assert mock.call_count == 1
+    assert result["food_items"][0]["name"] == "chicken biryani"
     assert len(result["food_items"]) == 1
 
 
 @pytest.mark.asyncio
-async def test_gemini_fails_falls_back_to_openrouter():
+async def test_groq_vision_fails_raises_error():
     recognizer = AIFoodRecognizer()
     with (
         patch("app.services.ai_food_recognizer.preprocess_image", return_value=(b"processed", "image/jpeg")),
-        patch.object(recognizer, "_analyze_with_gemini", new_callable=AsyncMock) as mock_gemini,
-        patch.object(recognizer, "_analyze_with_openrouter", new_callable=AsyncMock) as mock_or,
+        patch.object(recognizer, "_analyze_with_groq", new_callable=AsyncMock) as mock_groq,
     ):
-        mock_gemini.side_effect = Exception("Gemini 429 rate limit")
-        or_result = {**MOCK_RECOGNITION_RESULT, "_ai_provider": "openrouter", "_ai_model": "qwen/qwen3-vl-30b-a3b:free"}
-        mock_or.return_value = or_result
-
-        result = await recognizer.analyze_food_image(b"fake", "image/jpeg")
-
-    assert result["_ai_provider"] == "openrouter"
-
-
-@pytest.mark.asyncio
-async def test_all_providers_fail_raises_error():
-    recognizer = AIFoodRecognizer()
-    with (
-        patch("app.services.ai_food_recognizer.preprocess_image", return_value=(b"processed", "image/jpeg")),
-        patch.object(recognizer, "_analyze_with_gemini", new_callable=AsyncMock) as mock_g,
-        patch.object(recognizer, "_analyze_with_openrouter", new_callable=AsyncMock) as mock_or,
-    ):
-        mock_g.side_effect = Exception("Gemini down")
-        mock_or.side_effect = Exception("OpenRouter down")
+        mock_groq.side_effect = Exception("Groq down")
 
         with pytest.raises(ServiceUnavailableError):
             await recognizer.analyze_food_image(b"fake", "image/jpeg")
@@ -100,7 +82,7 @@ MOCK_COMBINED_RESULT = {
 
 
 @pytest.mark.asyncio
-async def test_combined_gemini_success():
+async def test_combined_groq_success():
     """Combined call returns food items with nutrition in one call."""
     recognizer = AIFoodRecognizer()
     with (
@@ -109,13 +91,13 @@ async def test_combined_gemini_success():
             return_value=(b"processed", "image/jpeg"),
         ),
         patch.object(
-            recognizer, "_combined_gemini", new_callable=AsyncMock
+            recognizer, "_combined_groq", new_callable=AsyncMock
         ) as mock_combined,
     ):
         mock_combined.return_value = MOCK_COMBINED_RESULT
         result = await recognizer.analyze_food_image_with_nutrition(b"fake", "image/jpeg")
 
-    assert result["_ai_provider"] == "gemini"
+    assert mock_combined.call_count == 1
     assert result["food_items"][0]["calories"] == 555
     assert result["food_items"][0]["protein_g"] == 31
 
@@ -143,13 +125,7 @@ async def test_combined_falls_back_to_two_step():
         ),
         patch.object(
             recognizer,
-            "_combined_gemini",
-            new_callable=AsyncMock,
-            return_value=incomplete_result,
-        ),
-        patch.object(
-            recognizer,
-            "_combined_openrouter",
+            "_combined_groq",
             new_callable=AsyncMock,
             return_value=incomplete_result,
         ),
@@ -159,8 +135,8 @@ async def test_combined_falls_back_to_two_step():
     ):
         mock_fallback.return_value = {
             **MOCK_COMBINED_RESULT,
-            "_ai_provider": "gemini",
-            "_ai_model": "gemini-2.0-flash",
+            "_ai_provider": "groq",
+            "_ai_model": "meta-llama/llama-4-maverick-17b-128e-instruct",
         }
         result = await recognizer.analyze_food_image_with_nutrition(b"fake", "image/jpeg")
 
@@ -179,13 +155,7 @@ async def test_combined_all_fail_raises():
         ),
         patch.object(
             recognizer,
-            "_combined_gemini",
-            new_callable=AsyncMock,
-            side_effect=Exception("fail"),
-        ),
-        patch.object(
-            recognizer,
-            "_combined_openrouter",
+            "_combined_groq",
             new_callable=AsyncMock,
             side_effect=Exception("fail"),
         ),
@@ -264,3 +234,66 @@ def test_parse_json_truncated_with_markdown():
     result = AIFoodRecognizer._parse_json_response(truncated)
     assert result is not None
     assert result["food_items"][0]["name"] == "paneer"
+
+
+def test_confidence_string_to_float():
+    """_normalize_simple_response converts confidence strings to floats."""
+    recognizer = AIFoodRecognizer
+    for conf_str, expected in [("high", 0.9), ("medium", 0.7), ("low", 0.5)]:
+        parsed = {
+            "items": [{
+                "name": "test",
+                "estimated_weight_grams": 100,
+                "calories": 200,
+                "protein_g": 10,
+                "carbs_g": 20,
+                "fat_g": 5,
+                "fiber_g": 2,
+                "confidence": conf_str,
+            }],
+        }
+        result = recognizer._normalize_simple_response(parsed)
+        assert result["food_items"][0]["confidence"] == expected
+
+    # Unrecognised value defaults to 0.7
+    parsed_unknown = {
+        "items": [{
+            "name": "test",
+            "estimated_weight_grams": 100,
+            "calories": 200,
+            "protein_g": 10,
+            "carbs_g": 20,
+            "fat_g": 5,
+            "fiber_g": 2,
+            "confidence": "unrecognised_value",
+        }],
+    }
+    result = recognizer._normalize_simple_response(parsed_unknown)
+    assert result["food_items"][0]["confidence"] == 0.7
+
+
+def test_simple_prompt_empty_vitamins_minerals():
+    """Normalised output has empty vitamins/minerals dicts when AI omits them."""
+    parsed = {
+        "items": [{
+            "name": "paneer tikka",
+            "hindi_name": "पनीर टिक्का",
+            "estimated_portion": "6 pieces",
+            "estimated_weight_grams": 200,
+            "calories": 350,
+            "protein_g": 22,
+            "carbs_g": 8,
+            "fat_g": 26,
+            "fiber_g": 1,
+            "confidence": "high",
+        }],
+        "meal_description": "Paneer tikka",
+        "cuisine_type": "Indian",
+        "assumptions": "Standard restaurant serving",
+    }
+    result = AIFoodRecognizer._normalize_simple_response(parsed)
+    assert result["food_items"][0]["vitamins"] == {}
+    assert result["food_items"][0]["minerals"] == {}
+    assert result["food_items"][0]["estimated_weight_g"] == 200
+    assert result["food_items"][0]["confidence"] == 0.9
+    assert result["meal_description"] == "Paneer tikka"

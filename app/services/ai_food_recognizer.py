@@ -14,7 +14,6 @@ import json
 import logging
 from io import BytesIO
 
-import httpx
 from openai import AsyncOpenAI
 from PIL import Image
 
@@ -22,11 +21,10 @@ from app.core.config import get_settings
 from app.core.exceptions import ai_all_providers_failed
 from app.utils.constants import MAX_IMAGE_DIMENSION_PX
 from app.utils.prompts import (
-    COMBINED_RECOGNITION_SYSTEM_PROMPT,
-    COMBINED_RECOGNITION_USER_PROMPT,
     FOOD_RECOGNITION_SYSTEM_PROMPT,
     FOOD_RECOGNITION_USER_PROMPT,
     NUTRITION_ESTIMATION_PROMPT,
+    SIMPLE_COMBINED_PROMPT,
 )
 
 logger = logging.getLogger(__name__)
@@ -70,38 +68,15 @@ def preprocess_image(image_bytes: bytes, mime_type: str) -> tuple[bytes, str]:
 class AIFoodRecognizer:
     """
     Handles food recognition from images using AI vision models.
-    Implements automatic fallback: Gemini → OpenRouter models (4 attempts).
+    Strictly uses meta-llama/llama-4-maverick-17b-128e-instruct via Groq API.
     """
 
-    # OpenRouter free vision models (tried in order)
-    OPENROUTER_VISION_MODELS = [
-        "google/gemini-2.5-flash:free",
-        "google/gemini-2.0-flash-001:free",
-        "openai/gpt-4o-mini:free",
-        "openrouter/free",
-    ]
-
-    OPENROUTER_TEXT_MODELS = [
-        "google/gemini-2.5-flash:free",
-        "deepseek/deepseek-v3.2-20251201:free",
-        "openai/gpt-4o-mini:free",
-        "openrouter/free",
-    ]
-
     def __init__(self):
-        self.gemini_api_key = settings.gemini_api_key
-        self._gemini_client: httpx.AsyncClient | None = None
-
-    async def _get_gemini_client(self) -> httpx.AsyncClient:
-        """Get or create reusable httpx client for Gemini API."""
-        if self._gemini_client is None or self._gemini_client.is_closed:
-            self._gemini_client = httpx.AsyncClient(timeout=30.0)
-        return self._gemini_client
+        self.groq_api_key = settings.groq_api_key
 
     async def close(self) -> None:
-        """Close the shared HTTP client."""
-        if self._gemini_client and not self._gemini_client.is_closed:
-            await self._gemini_client.aclose()
+        """No persistent httpx client needed for AsyncOpenAI wrapper."""
+        pass
 
     async def analyze_food_image_with_nutrition(
         self, image_bytes: bytes, mime_type: str = "image/jpeg"
@@ -116,35 +91,23 @@ class AIFoodRecognizer:
         """
         processed_bytes, processed_mime = preprocess_image(image_bytes, mime_type)
 
-        # Try combined call with Gemini
         try:
-            result = await self._combined_gemini(processed_bytes, processed_mime)
-            if result and self._has_nutrition_data(result):
-                result["_ai_provider"] = "gemini"
-                result["_ai_model"] = "gemini-2.0-flash"
-                logger.info("Combined recognition+nutrition succeeded via Gemini")
-                return result
-        except Exception as exc:
-            logger.warning(f"Gemini combined call failed: {exc}")
-
-        # Try combined call with OpenRouter
-        try:
-            result = await self._combined_openrouter(processed_bytes, processed_mime)
+            result = await self._combined_groq(processed_bytes, processed_mime)
             if result and self._has_nutrition_data(result):
                 logger.info(
-                    f"Combined recognition+nutrition succeeded via OpenRouter"
+                    f"Combined recognition+nutrition succeeded via Groq"
                     f" ({result.get('_ai_model')})"
                 )
                 return result
         except Exception as exc:
-            logger.warning(f"OpenRouter combined call failed: {exc}")
+            logger.warning(f"Groq combined call failed: {exc}")
 
-        # Fallback: two-step pipeline (existing logic)
+        # Fallback: two-step pipeline
         logger.info("Combined call failed/incomplete, falling back to two-step pipeline")
         return await self._two_step_fallback(image_bytes, mime_type)
 
     async def _two_step_fallback(self, image_bytes: bytes, mime_type: str) -> dict:
-        """Run the original two-step pipeline: vision -> nutrition."""
+        """Run the two-step pipeline: vision -> nutrition."""
         recognition = await self.analyze_food_image(image_bytes, mime_type)
         raw_items = recognition.get("food_items", [])
         if not raw_items:
@@ -153,6 +116,34 @@ class AIFoodRecognizer:
         nutrition_items = nutrition_result.get("food_items", []) if nutrition_result else raw_items
         recognition["food_items"] = nutrition_items
         return recognition
+
+    @staticmethod
+    def _normalize_simple_response(parsed: dict) -> dict:
+        """Convert SIMPLE_COMBINED_PROMPT schema to internal food_items format."""
+        confidence_map = {"high": 0.9, "medium": 0.7, "low": 0.5}
+        raw_items = parsed.get("items", [])
+        food_items = []
+        for item in raw_items:
+            food_items.append({
+                "name": item.get("name", "unknown"),
+                "hindi_name": item.get("hindi_name", ""),
+                "estimated_portion": item.get("estimated_portion", "1 serving"),
+                "estimated_weight_g": item.get("estimated_weight_grams", item.get("estimated_weight_g", 100)),
+                "calories": item.get("calories", 0),
+                "protein_g": item.get("protein_g", 0),
+                "carbs_g": item.get("carbs_g", 0),
+                "fat_g": item.get("fat_g", 0),
+                "fiber_g": item.get("fiber_g", 0),
+                "confidence": confidence_map.get(str(item.get("confidence", "medium")).lower(), 0.7),
+                "vitamins": {},
+                "minerals": {},
+            })
+        return {
+            "food_items": food_items,
+            "meal_description": parsed.get("meal_description", ""),
+            "cuisine_type": parsed.get("cuisine_type", ""),
+            "assumptions": parsed.get("assumptions", ""),
+        }
 
     @staticmethod
     def _has_nutrition_data(result: dict) -> bool:
@@ -166,148 +157,59 @@ class AIFoodRecognizer:
     async def analyze_food_image(self, image_bytes: bytes, mime_type: str = "image/jpeg") -> dict:
         """
         Main entry point: preprocess image and identify food items.
-
-        Tries Gemini first, then each OpenRouter model in order.
+        Uses Groq vision API exclusively.
 
         Returns:
             dict with keys: food_items, meal_description, cuisine_type,
                             _ai_provider, _ai_model
 
         Raises:
-            ServiceUnavailableError: If all providers fail.
+            ServiceUnavailableError: If Groq fails.
         """
         processed_bytes, processed_mime = preprocess_image(image_bytes, mime_type)
 
-        # 1. Try Gemini (primary)
         try:
-            result = await self._analyze_with_gemini(processed_bytes, processed_mime)
-            if result:
-                result["_ai_provider"] = "gemini"
-                result["_ai_model"] = "gemini-2.0-flash"
-                logger.info("Food recognition succeeded via Gemini")
-                return result
-        except Exception as exc:
-            logger.warning(f"Gemini vision failed: {exc}")
-
-        # 2. Fallback to OpenRouter
-        try:
-            result = await self._analyze_with_openrouter(processed_bytes, processed_mime)
+            result = await self._analyze_with_groq(processed_bytes, processed_mime)
             if result:
                 logger.info(
-                    f"Food recognition succeeded via OpenRouter ({result.get('_ai_model')})"
+                    f"Food recognition succeeded via Groq ({result.get('_ai_model')})"
                 )
                 return result
         except Exception as exc:
-            logger.error(f"All OpenRouter vision models failed: {exc}")
+            logger.error(f"Groq vision model failed: {exc}")
 
         raise ai_all_providers_failed()
 
     async def estimate_nutrition(self, food_items: list[dict]) -> dict:
         """
-        Given identified food items (from analyze_food_image), estimate nutrition.
-        Uses text-only AI call — cheaper and faster than vision.
+        Given identified food items, estimate nutrition.
+        Uses text-only Groq API call.
 
         Returns:
             dict with key food_items, each containing full macro + micro nutrition.
 
         Raises:
-            ServiceUnavailableError: If all providers fail.
+            ServiceUnavailableError: If Groq fails.
         """
         prompt = NUTRITION_ESTIMATION_PROMPT.format(
             food_items_json=json.dumps(food_items, indent=2)
         )
 
-        # 1. Try Gemini text
         try:
-            result = await self._text_query_gemini(prompt)
+            result = await self._text_query_groq(prompt)
             if result:
                 return result
         except Exception as exc:
-            logger.warning(f"Gemini nutrition estimation failed: {exc}")
-
-        # 2. Fallback to OpenRouter text
-        try:
-            result = await self._text_query_openrouter(prompt)
-            if result:
-                return result
-        except Exception as exc:
-            logger.error(f"OpenRouter nutrition estimation failed: {exc}")
+            logger.error(f"Groq nutrition estimation failed: {exc}")
 
         raise ai_all_providers_failed()
 
-    # ── Gemini implementations ────────────────────────────────────────────────
+    # ── Groq implementations ──────────────────────────────────────────────────
 
-    async def _analyze_with_gemini(self, image_bytes: bytes, mime_type: str) -> dict | None:
-        """Call Gemini Flash vision API via REST."""
-        if not self.gemini_api_key:
-            logger.debug("GEMINI_API_KEY not set, skipping Gemini")
-            return None
-
-        b64_image = base64.b64encode(image_bytes).decode("utf-8")
-        url = (
-            f"https://generativelanguage.googleapis.com/v1beta/models/"
-            f"gemini-2.0-flash:generateContent?key={self.gemini_api_key}"
-        )
-        payload = {
-            "contents": [
-                {
-                    "parts": [
-                        {
-                            "text": FOOD_RECOGNITION_SYSTEM_PROMPT
-                            + "\n\n"
-                            + FOOD_RECOGNITION_USER_PROMPT
-                        },
-                        {"inline_data": {"mime_type": mime_type, "data": b64_image}},
-                    ]
-                }
-            ],
-            "generationConfig": {
-                "temperature": 0.15,
-                "maxOutputTokens": 1024,
-                "responseMimeType": "application/json",
-            },
-        }
-
-        client = await self._get_gemini_client()
-        resp = await client.post(url, json=payload, timeout=30.0)
-        resp.raise_for_status()
-        data = resp.json()
-
-        text = data["candidates"][0]["content"]["parts"][0]["text"]
-        return self._parse_json_response(text)
-
-    async def _text_query_gemini(self, prompt: str) -> dict | None:
-        """Text-only Gemini call for nutrition estimation."""
-        if not self.gemini_api_key:
-            return None
-
-        url = (
-            f"https://generativelanguage.googleapis.com/v1beta/models/"
-            f"gemini-2.0-flash:generateContent?key={self.gemini_api_key}"
-        )
-        payload = {
-            "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {
-                "temperature": 0.15,
-                "maxOutputTokens": 8192,
-                "responseMimeType": "application/json",
-            },
-        }
-
-        client = await self._get_gemini_client()
-        resp = await client.post(url, json=payload, timeout=20.0)
-        resp.raise_for_status()
-        data = resp.json()
-
-        text = data["candidates"][0]["content"]["parts"][0]["text"]
-        return self._parse_json_response(text)
-
-    # ── OpenRouter implementations ────────────────────────────────────────────
-
-    async def _analyze_with_openrouter(self, image_bytes: bytes, mime_type: str) -> dict | None:
-        """Try each OpenRouter free vision model until one succeeds."""
-        if not settings.openrouter_api_key:
-            logger.debug("OPENROUTER_API_KEY not set, skipping OpenRouter")
+    async def _analyze_with_groq(self, image_bytes: bytes, mime_type: str) -> dict | None:
+        """Call Groq vision API."""
+        if not self.groq_api_key:
+            logger.debug("GROQ_API_KEY not set, skipping Groq")
             return None
 
         b64_image = base64.b64encode(image_bytes).decode("utf-8")
@@ -329,99 +231,58 @@ class AIFoodRecognizer:
         ]
 
         async with AsyncOpenAI(
-            base_url="https://openrouter.ai/api/v1",
-            api_key=settings.openrouter_api_key,
+            base_url="https://api.groq.com/openai/v1",
+            api_key=self.groq_api_key,
         ) as client:
-            for model in self.OPENROUTER_VISION_MODELS:
-                try:
-                    response = await client.chat.completions.create(
-                        model=model,
-                        messages=messages,
-                        temperature=0.15,
-                        max_tokens=1024,
-                    )
-                    text = response.choices[0].message.content
-                    result = self._parse_json_response(text)
-                    if result:
-                        result["_ai_provider"] = "openrouter"
-                        result["_ai_model"] = model
-                        return result
-                except Exception as exc:
-                    logger.warning(f"OpenRouter vision model '{model}' failed: {exc}")
+            try:
+                response = await client.chat.completions.create(
+                    model="meta-llama/llama-4-maverick-17b-128e-instruct",
+                    messages=messages,
+                    temperature=0.15,
+                    max_tokens=1024,
+                )
+                text = response.choices[0].message.content
+                result = self._parse_json_response(text)
+                if result:
+                    result["_ai_provider"] = "groq"
+                    result["_ai_model"] = "meta-llama/llama-4-maverick-17b-128e-instruct"
+                    return result
+            except Exception as exc:
+                logger.warning(f"Groq vision model failed: {exc}")
+                raise exc
 
         return None
 
-    async def _text_query_openrouter(self, prompt: str) -> dict | None:
-        """Text-only OpenRouter call for nutrition estimation."""
-        if not settings.openrouter_api_key:
+    async def _text_query_groq(self, prompt: str) -> dict | None:
+        """Text-only Groq call for nutrition estimation."""
+        if not self.groq_api_key:
             return None
 
         async with AsyncOpenAI(
-            base_url="https://openrouter.ai/api/v1",
-            api_key=settings.openrouter_api_key,
+            base_url="https://api.groq.com/openai/v1",
+            api_key=self.groq_api_key,
         ) as client:
-            for model in self.OPENROUTER_TEXT_MODELS:
-                try:
-                    response = await client.chat.completions.create(
-                        model=model,
-                        messages=[{"role": "user", "content": prompt}],
-                        temperature=0.15,
-                        max_tokens=8192,
-                    )
-                    text = response.choices[0].message.content
-                    result = self._parse_json_response(text)
-                    if result:
-                        return result
-                except Exception as exc:
-                    logger.warning(f"OpenRouter text model '{model}' failed: {exc}")
+            try:
+                response = await client.chat.completions.create(
+                    model="meta-llama/llama-4-maverick-17b-128e-instruct",
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.15,
+                    max_tokens=8192,
+                )
+                text = response.choices[0].message.content
+                result = self._parse_json_response(text)
+                if result:
+                    return result
+            except Exception as exc:
+                logger.warning(f"Groq text model failed: {exc}")
+                raise exc
 
         return None
 
-    # ── Combined (single-call) implementations ───────────────────────────────
-
-    async def _combined_gemini(self, image_bytes: bytes, mime_type: str) -> dict | None:
-        """Single Gemini call for recognition + nutrition."""
-        if not self.gemini_api_key:
-            logger.debug("GEMINI_API_KEY not set, skipping Gemini combined")
-            return None
-
-        b64_image = base64.b64encode(image_bytes).decode("utf-8")
-        url = (
-            f"https://generativelanguage.googleapis.com/v1beta/models/"
-            f"gemini-2.0-flash:generateContent?key={self.gemini_api_key}"
-        )
-        payload = {
-            "contents": [
-                {
-                    "parts": [
-                        {
-                            "text": COMBINED_RECOGNITION_SYSTEM_PROMPT
-                            + "\n\n"
-                            + COMBINED_RECOGNITION_USER_PROMPT
-                        },
-                        {"inline_data": {"mime_type": mime_type, "data": b64_image}},
-                    ]
-                }
-            ],
-            "generationConfig": {
-                "temperature": 0.15,
-                "maxOutputTokens": 4096,
-                "responseMimeType": "application/json",
-            },
-        }
-
-        client = await self._get_gemini_client()
-        resp = await client.post(url, json=payload, timeout=30.0)
-        resp.raise_for_status()
-        data = resp.json()
-
-        text = data["candidates"][0]["content"]["parts"][0]["text"]
-        return self._parse_json_response(text)
-
-    async def _combined_openrouter(self, image_bytes: bytes, mime_type: str) -> dict | None:
-        """Single OpenRouter call for recognition + nutrition."""
-        if not settings.openrouter_api_key:
-            logger.debug("OPENROUTER_API_KEY not set, skipping OpenRouter combined")
+    async def _combined_groq(self, image_bytes: bytes, mime_type: str) -> dict | None:
+        """Single Groq call for recognition + nutrition."""
+        if not self.groq_api_key:
+            logger.debug("GROQ_API_KEY not set, skipping Groq combined")
             return None
 
         b64_image = base64.b64encode(image_bytes).decode("utf-8")
@@ -431,37 +292,33 @@ class AIFoodRecognizer:
             {
                 "role": "user",
                 "content": [
-                    {
-                        "type": "text",
-                        "text": COMBINED_RECOGNITION_SYSTEM_PROMPT
-                        + "\n\n"
-                        + COMBINED_RECOGNITION_USER_PROMPT,
-                    },
+                    {"type": "text", "text": SIMPLE_COMBINED_PROMPT},
                     {"type": "image_url", "image_url": {"url": image_data_url}},
                 ],
             },
         ]
 
         async with AsyncOpenAI(
-            base_url="https://openrouter.ai/api/v1",
-            api_key=settings.openrouter_api_key,
+            base_url="https://api.groq.com/openai/v1",
+            api_key=self.groq_api_key,
         ) as client:
-            for model in self.OPENROUTER_VISION_MODELS:
-                try:
-                    response = await client.chat.completions.create(
-                        model=model,
-                        messages=messages,
-                        temperature=0.15,
-                        max_tokens=4096,
-                    )
-                    text = response.choices[0].message.content
-                    result = self._parse_json_response(text)
-                    if result:
-                        result["_ai_provider"] = "openrouter"
-                        result["_ai_model"] = model
-                        return result
-                except Exception as exc:
-                    logger.warning(f"OpenRouter combined model '{model}' failed: {exc}")
+            try:
+                response = await client.chat.completions.create(
+                    model="meta-llama/llama-4-maverick-17b-128e-instruct",
+                    messages=messages,
+                    temperature=0.15,
+                    max_tokens=1000,
+                )
+                text = response.choices[0].message.content
+                parsed = self._parse_json_response(text)
+                if parsed is not None:
+                    result = self._normalize_simple_response(parsed)
+                    result["_ai_provider"] = "groq"
+                    result["_ai_model"] = "meta-llama/llama-4-maverick-17b-128e-instruct"
+                    return result
+            except Exception as exc:
+                logger.warning(f"Groq combined model failed: {exc}")
+                raise exc
 
         return None
 
