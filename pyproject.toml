@@ -26,8 +26,9 @@ dependencies = [
     "passlib[bcrypt]>=1.7.4",            # Password hashing
     "bcrypt==4.0.1",                     # Pin version for passlib compatibility
     # AI
-    "openai>=1.60.0",           # OpenRouter (OpenAI-compatible)
-    "httpx>=0.28.0",            # Async HTTP (Gemini REST, USDA)
+    "google-genai>=1.14.0",     # Gemini 2.0 Flash via Developer API
+    "groq>=0.25.0",             # Groq API (Llama 4 Maverick)
+    "httpx>=0.28.0",            # Async HTTP
     # Image processing
     "Pillow>=11.0.0",           # EXIF strip + resize
     # Redis
