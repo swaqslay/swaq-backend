@@ -36,7 +36,9 @@ settings = get_settings()
 async def lifespan(app: FastAPI):
     """Application startup and shutdown."""
     logger.info(f"Starting {settings.app_name} [{settings.effective_app_env}]")
+    logger.info(f"AI Provider  : {settings.ai_provider.upper()}")
     logger.info(f"Gemini API   : {'✓ configured' if settings.gemini_api_key else '✗ NOT SET'}")
+    logger.info(f"Groq API     : {'✓ configured' if settings.groq_api_key else '✗ NOT SET'}")
     logger.info(f"OpenRouter   : {'✓ configured' if settings.openrouter_api_key else '✗ NOT SET'}")
     logger.info(f"USDA API     : {'✓ configured' if settings.usda_api_key else '✗ NOT SET'}")
     logger.info(
@@ -129,8 +131,10 @@ async def health():
     """Basic health check — always returns 200 if the process is running."""
     return {
         "status": "healthy",
+        "ai_provider": settings.ai_provider,
         "services": {
             "gemini": "configured" if settings.gemini_api_key else "missing",
+            "groq": "configured" if settings.groq_api_key else "missing",
             "openrouter": "configured" if settings.openrouter_api_key else "missing",
             "usda": "configured" if settings.usda_api_key else "missing",
             "redis": "configured" if settings.redis_url else "disabled",
@@ -172,7 +176,9 @@ async def readiness():
         checks["redis"] = "disabled"
 
     # AI keys presence (not connectivity — avoids billing)
+    checks["ai_provider"] = settings.ai_provider
     checks["gemini"] = "configured" if settings.gemini_api_key else "missing"
+    checks["groq"] = "configured" if settings.groq_api_key else "missing"
     checks["openrouter"] = "configured" if settings.openrouter_api_key else "missing"
 
     status_code = 200 if all_ok else 503

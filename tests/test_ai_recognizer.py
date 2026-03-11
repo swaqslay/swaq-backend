@@ -1,6 +1,6 @@
 """Tests for AI food recognizer — mocking external API calls."""
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, patch, PropertyMock
 
 import pytest
 
@@ -32,33 +32,112 @@ MOCK_NUTRITION_RESULT = {
 }
 
 
+# ── Gemini provider tests ─────────────────────────────────────────────────────
+
+
 @pytest.mark.asyncio
-async def test_groq_success():
+async def test_gemini_success():
     recognizer = AIFoodRecognizer()
+    recognizer.ai_provider = "gemini"
     with (
         patch("app.services.ai_food_recognizer.preprocess_image", return_value=(b"processed", "image/jpeg")),
-        patch.object(recognizer, "_analyze_with_groq", new_callable=AsyncMock) as mock,
+        patch.object(recognizer, "_analyze_with_gemini", new_callable=AsyncMock) as mock,
     ):
         mock.return_value = MOCK_RECOGNITION_RESULT
         result = await recognizer.analyze_food_image(b"fake_image_bytes", "image/jpeg")
-    
+
     assert mock.call_count == 1
     assert result["food_items"][0]["name"] == "chicken biryani"
     assert len(result["food_items"]) == 1
 
 
 @pytest.mark.asyncio
-async def test_groq_vision_fails_raises_error():
+async def test_gemini_vision_fails_raises_error():
     recognizer = AIFoodRecognizer()
+    recognizer.ai_provider = "gemini"
+    recognizer.groq_api_key = ""  # disable fallback
     with (
         patch("app.services.ai_food_recognizer.preprocess_image", return_value=(b"processed", "image/jpeg")),
-        patch.object(recognizer, "_analyze_with_groq", new_callable=AsyncMock) as mock_groq,
+        patch.object(recognizer, "_analyze_with_gemini", new_callable=AsyncMock) as mock_gemini,
     ):
-        mock_groq.side_effect = Exception("Groq down")
+        mock_gemini.side_effect = Exception("Gemini down")
 
         with pytest.raises(ServiceUnavailableError):
             await recognizer.analyze_food_image(b"fake", "image/jpeg")
 
+
+# ── Groq provider tests ───────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_groq_success():
+    recognizer = AIFoodRecognizer()
+    recognizer.ai_provider = "groq"
+    with (
+        patch("app.services.ai_food_recognizer.preprocess_image", return_value=(b"processed", "image/jpeg")),
+        patch.object(recognizer, "_analyze_with_groq", new_callable=AsyncMock) as mock,
+    ):
+        mock.return_value = {**MOCK_RECOGNITION_RESULT, "_ai_provider": "groq", "_ai_model": "llama-4-maverick"}
+        result = await recognizer.analyze_food_image(b"fake_image_bytes", "image/jpeg")
+
+    assert mock.call_count == 1
+    assert result["food_items"][0]["name"] == "chicken biryani"
+    assert result["_ai_provider"] == "groq"
+
+
+@pytest.mark.asyncio
+async def test_groq_vision_fails_falls_back_to_gemini():
+    """If Groq fails and Gemini is configured, fallback to Gemini."""
+    recognizer = AIFoodRecognizer()
+    recognizer.ai_provider = "groq"
+    with (
+        patch("app.services.ai_food_recognizer.preprocess_image", return_value=(b"processed", "image/jpeg")),
+        patch.object(recognizer, "_analyze_with_groq", new_callable=AsyncMock) as mock_groq,
+        patch.object(recognizer, "_analyze_with_gemini", new_callable=AsyncMock) as mock_gemini,
+    ):
+        mock_groq.side_effect = Exception("Groq down")
+        mock_gemini.return_value = {**MOCK_RECOGNITION_RESULT, "_ai_provider": "gemini", "_ai_model": "gemini-2.0-flash-001"}
+        result = await recognizer.analyze_food_image(b"fake", "image/jpeg")
+
+    assert mock_groq.call_count == 1
+    assert mock_gemini.call_count == 1
+    assert result["_ai_provider"] == "gemini"
+
+
+@pytest.mark.asyncio
+async def test_gemini_fails_falls_back_to_groq():
+    """If Gemini is primary and fails, fallback to Groq."""
+    recognizer = AIFoodRecognizer()
+    recognizer.ai_provider = "gemini"
+    with (
+        patch("app.services.ai_food_recognizer.preprocess_image", return_value=(b"processed", "image/jpeg")),
+        patch.object(recognizer, "_analyze_with_gemini", new_callable=AsyncMock) as mock_gemini,
+        patch.object(recognizer, "_analyze_with_groq", new_callable=AsyncMock) as mock_groq,
+    ):
+        mock_gemini.side_effect = Exception("Gemini down")
+        mock_groq.return_value = {**MOCK_RECOGNITION_RESULT, "_ai_provider": "groq", "_ai_model": "llama-4-maverick"}
+        result = await recognizer.analyze_food_image(b"fake", "image/jpeg")
+
+    assert mock_gemini.call_count == 1
+    assert mock_groq.call_count == 1
+    assert result["_ai_provider"] == "groq"
+
+
+@pytest.mark.asyncio
+async def test_all_providers_fail_raises_error():
+    """If both providers fail, raises ServiceUnavailableError."""
+    recognizer = AIFoodRecognizer()
+    recognizer.ai_provider = "gemini"
+    with (
+        patch("app.services.ai_food_recognizer.preprocess_image", return_value=(b"processed", "image/jpeg")),
+        patch.object(recognizer, "_analyze_with_gemini", new_callable=AsyncMock, side_effect=Exception("fail")),
+        patch.object(recognizer, "_analyze_with_groq", new_callable=AsyncMock, side_effect=Exception("fail")),
+    ):
+        with pytest.raises(ServiceUnavailableError):
+            await recognizer.analyze_food_image(b"fake", "image/jpeg")
+
+
+# ── Combined call tests ───────────────────────────────────────────────────────
 
 MOCK_COMBINED_RESULT = {
     "food_items": [
@@ -82,16 +161,17 @@ MOCK_COMBINED_RESULT = {
 
 
 @pytest.mark.asyncio
-async def test_combined_groq_success():
+async def test_combined_gemini_success():
     """Combined call returns food items with nutrition in one call."""
     recognizer = AIFoodRecognizer()
+    recognizer.ai_provider = "gemini"
     with (
         patch(
             "app.services.ai_food_recognizer.preprocess_image",
             return_value=(b"processed", "image/jpeg"),
         ),
         patch.object(
-            recognizer, "_combined_groq", new_callable=AsyncMock
+            recognizer, "_combined_gemini", new_callable=AsyncMock
         ) as mock_combined,
     ):
         mock_combined.return_value = MOCK_COMBINED_RESULT
@@ -103,9 +183,32 @@ async def test_combined_groq_success():
 
 
 @pytest.mark.asyncio
+async def test_combined_groq_success():
+    """Combined call via Groq returns food items with nutrition."""
+    recognizer = AIFoodRecognizer()
+    recognizer.ai_provider = "groq"
+    with (
+        patch(
+            "app.services.ai_food_recognizer.preprocess_image",
+            return_value=(b"processed", "image/jpeg"),
+        ),
+        patch.object(
+            recognizer, "_combined_groq", new_callable=AsyncMock
+        ) as mock_combined,
+    ):
+        mock_combined.return_value = {**MOCK_COMBINED_RESULT, "_ai_provider": "groq", "_ai_model": "llama-4-maverick"}
+        result = await recognizer.analyze_food_image_with_nutrition(b"fake", "image/jpeg")
+
+    assert mock_combined.call_count == 1
+    assert result["food_items"][0]["calories"] == 555
+    assert result["_ai_provider"] == "groq"
+
+
+@pytest.mark.asyncio
 async def test_combined_falls_back_to_two_step():
     """If combined call returns no nutrition data, falls back to two-step."""
     recognizer = AIFoodRecognizer()
+    recognizer.ai_provider = "gemini"
     incomplete_result = {
         "food_items": [
             {
@@ -125,6 +228,13 @@ async def test_combined_falls_back_to_two_step():
         ),
         patch.object(
             recognizer,
+            "_combined_gemini",
+            new_callable=AsyncMock,
+            return_value=incomplete_result,
+        ),
+        # Also mock the Groq variant since it will be tried as fallback
+        patch.object(
+            recognizer,
             "_combined_groq",
             new_callable=AsyncMock,
             return_value=incomplete_result,
@@ -135,8 +245,8 @@ async def test_combined_falls_back_to_two_step():
     ):
         mock_fallback.return_value = {
             **MOCK_COMBINED_RESULT,
-            "_ai_provider": "groq",
-            "_ai_model": "meta-llama/llama-4-maverick-17b-128e-instruct",
+            "_ai_provider": "gemini",
+            "_ai_model": "gemini-2.0-flash-001",
         }
         result = await recognizer.analyze_food_image_with_nutrition(b"fake", "image/jpeg")
 
@@ -148,10 +258,17 @@ async def test_combined_falls_back_to_two_step():
 async def test_combined_all_fail_raises():
     """If combined + two-step all fail, raises ServiceUnavailableError."""
     recognizer = AIFoodRecognizer()
+    recognizer.ai_provider = "gemini"
     with (
         patch(
             "app.services.ai_food_recognizer.preprocess_image",
             return_value=(b"processed", "image/jpeg"),
+        ),
+        patch.object(
+            recognizer,
+            "_combined_gemini",
+            new_callable=AsyncMock,
+            side_effect=Exception("fail"),
         ),
         patch.object(
             recognizer,
@@ -168,6 +285,9 @@ async def test_combined_all_fail_raises():
     ):
         with pytest.raises(ServiceUnavailableError):
             await recognizer.analyze_food_image_with_nutrition(b"fake", "image/jpeg")
+
+
+# ── Utility tests ─────────────────────────────────────────────────────────────
 
 
 def test_has_nutrition_data_with_nutrition():

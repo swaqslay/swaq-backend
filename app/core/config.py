@@ -40,9 +40,11 @@ class Settings(BaseSettings):
     free_daily_scan_limit: int = 3
 
     # ── AI APIs ───────────────────────────────────────────────────────────────
+    ai_provider: str = "gemini"  # "gemini" or "groq"
     gemini_api_key: str = ""
     openrouter_api_key: str = ""
     groq_api_key: str = ""
+    groq_model: str = "meta-llama/llama-4-maverick-17b-128e-instruct"
 
     # ── Nutrition DB ──────────────────────────────────────────────────────────
     usda_api_key: str = ""
