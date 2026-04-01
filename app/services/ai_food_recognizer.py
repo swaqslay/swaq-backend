@@ -32,7 +32,7 @@ from app.utils.prompts import (
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
-GEMINI_MODEL = "gemini-2.0-flash-001"
+GEMINI_MODEL = "gemini-2.5-flash"
 
 
 def preprocess_image(image_bytes: bytes, mime_type: str) -> tuple[bytes, str]:
@@ -125,7 +125,7 @@ class AIFoodRecognizer:
     # ── High-level entry points ───────────────────────────────────────────────
 
     async def analyze_food_image_with_nutrition(
-        self, image_bytes: bytes, mime_type: str = "image/jpeg"
+        self, image_bytes: bytes, mime_type: str = "image/jpeg", notes: str | None = None
     ) -> dict:
         """
         Combined single-call: identify food items AND estimate nutrition in one AI call.
@@ -145,7 +145,7 @@ class AIFoodRecognizer:
                 combined_fn = (
                     self._combined_gemini if provider == "gemini" else self._combined_groq
                 )
-                result = await combined_fn(processed_bytes, processed_mime)
+                result = await combined_fn(processed_bytes, processed_mime, notes)
                 if result and self._has_nutrition_data(result):
                     logger.info(
                         f"Combined recognition+nutrition succeeded via {provider}"
@@ -157,11 +157,11 @@ class AIFoodRecognizer:
 
         # Fallback: two-step pipeline
         logger.info("Combined call failed/incomplete, falling back to two-step pipeline")
-        return await self._two_step_fallback(image_bytes, mime_type)
+        return await self._two_step_fallback(image_bytes, mime_type, notes)
 
-    async def _two_step_fallback(self, image_bytes: bytes, mime_type: str) -> dict:
+    async def _two_step_fallback(self, image_bytes: bytes, mime_type: str, notes: str | None = None) -> dict:
         """Run the two-step pipeline: vision -> nutrition."""
-        recognition = await self.analyze_food_image(image_bytes, mime_type)
+        recognition = await self.analyze_food_image(image_bytes, mime_type, notes)
         raw_items = recognition.get("food_items", [])
         if not raw_items:
             return recognition
@@ -207,7 +207,7 @@ class AIFoodRecognizer:
         first = items[0]
         return "calories" in first and "protein_g" in first
 
-    async def analyze_food_image(self, image_bytes: bytes, mime_type: str = "image/jpeg") -> dict:
+    async def analyze_food_image(self, image_bytes: bytes, mime_type: str = "image/jpeg", notes: str | None = None) -> dict:
         """
         Main entry point: preprocess image and identify food items.
         Tries primary provider, falls back to alternate.
@@ -228,7 +228,7 @@ class AIFoodRecognizer:
                 analyze_fn = (
                     self._analyze_with_gemini if provider == "gemini" else self._analyze_with_groq
                 )
-                result = await analyze_fn(processed_bytes, processed_mime)
+                result = await analyze_fn(processed_bytes, processed_mime, notes)
                 if result:
                     logger.info(
                         f"Food recognition succeeded via {provider} ({result.get('_ai_model')})"
@@ -271,7 +271,7 @@ class AIFoodRecognizer:
 
     # ── Gemini implementations ──────────────────────────────────────────────────
 
-    async def _analyze_with_gemini(self, image_bytes: bytes, mime_type: str) -> dict | None:
+    async def _analyze_with_gemini(self, image_bytes: bytes, mime_type: str, notes: str | None = None) -> dict | None:
         """Call Gemini vision API for food recognition."""
         if not self.gemini_api_key:
             logger.debug("GEMINI_API_KEY not set, skipping Gemini")
@@ -284,6 +284,8 @@ class AIFoodRecognizer:
             + "\n\n"
             + FOOD_RECOGNITION_USER_PROMPT
         )
+        if notes:
+            prompt_text += f"\n\n[USER CONTEXT/NOTES]: {notes}"
 
         try:
             response = await client.aio.models.generate_content(
@@ -337,7 +339,7 @@ class AIFoodRecognizer:
 
         return None
 
-    async def _combined_gemini(self, image_bytes: bytes, mime_type: str) -> dict | None:
+    async def _combined_gemini(self, image_bytes: bytes, mime_type: str, notes: str | None = None) -> dict | None:
         """Single Gemini call for recognition + nutrition."""
         if not self.gemini_api_key:
             logger.debug("GEMINI_API_KEY not set, skipping Gemini combined")
@@ -345,12 +347,16 @@ class AIFoodRecognizer:
 
         client = self._get_gemini_client()
 
+        prompt_text = SIMPLE_COMBINED_PROMPT
+        if notes:
+            prompt_text += f"\n\n[USER CONTEXT/NOTES]: {notes}"
+
         try:
             response = await client.aio.models.generate_content(
                 model=GEMINI_MODEL,
                 contents=[
                     types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
-                    types.Part.from_text(text=SIMPLE_COMBINED_PROMPT),
+                    types.Part.from_text(text=prompt_text),
                 ],
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
@@ -373,7 +379,7 @@ class AIFoodRecognizer:
 
     # ── Groq implementations ────────────────────────────────────────────────────
 
-    async def _analyze_with_groq(self, image_bytes: bytes, mime_type: str) -> dict | None:
+    async def _analyze_with_groq(self, image_bytes: bytes, mime_type: str, notes: str | None = None) -> dict | None:
         """Call Groq vision API for food recognition."""
         if not self.groq_api_key:
             logger.debug("GROQ_API_KEY not set, skipping Groq")
@@ -388,6 +394,8 @@ class AIFoodRecognizer:
             + "\n\n"
             + FOOD_RECOGNITION_USER_PROMPT
         )
+        if notes:
+            prompt_text += f"\n\n[USER CONTEXT/NOTES]: {notes}"
 
         try:
             response = await client.chat.completions.create(
@@ -442,7 +450,7 @@ class AIFoodRecognizer:
 
         return None
 
-    async def _combined_groq(self, image_bytes: bytes, mime_type: str) -> dict | None:
+    async def _combined_groq(self, image_bytes: bytes, mime_type: str, notes: str | None = None) -> dict | None:
         """Single Groq call for recognition + nutrition."""
         if not self.groq_api_key:
             logger.debug("GROQ_API_KEY not set, skipping Groq combined")
@@ -452,6 +460,10 @@ class AIFoodRecognizer:
         b64_image = base64.b64encode(image_bytes).decode("utf-8")
         image_url = f"data:{mime_type};base64,{b64_image}"
 
+        prompt_text = SIMPLE_COMBINED_PROMPT
+        if notes:
+            prompt_text += f"\n\n[USER CONTEXT/NOTES]: {notes}"
+
         try:
             response = await client.chat.completions.create(
                 model=self.groq_model,
@@ -460,7 +472,7 @@ class AIFoodRecognizer:
                         "role": "user",
                         "content": [
                             {"type": "image_url", "image_url": {"url": image_url}},
-                            {"type": "text", "text": SIMPLE_COMBINED_PROMPT},
+                            {"type": "text", "text": prompt_text},
                         ],
                     }
                 ],

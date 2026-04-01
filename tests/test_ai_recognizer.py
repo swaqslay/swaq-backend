@@ -77,7 +77,7 @@ async def test_groq_success():
         patch("app.services.ai_food_recognizer.preprocess_image", return_value=(b"processed", "image/jpeg")),
         patch.object(recognizer, "_analyze_with_groq", new_callable=AsyncMock) as mock,
     ):
-        mock.return_value = {**MOCK_RECOGNITION_RESULT, "_ai_provider": "groq", "_ai_model": "llama-4-maverick"}
+        mock.return_value = {**MOCK_RECOGNITION_RESULT, "_ai_provider": "groq", "_ai_model": "llama-3.2-90b-vision-preview"}
         result = await recognizer.analyze_food_image(b"fake_image_bytes", "image/jpeg")
 
     assert mock.call_count == 1
@@ -115,7 +115,7 @@ async def test_gemini_fails_falls_back_to_groq():
         patch.object(recognizer, "_analyze_with_groq", new_callable=AsyncMock) as mock_groq,
     ):
         mock_gemini.side_effect = Exception("Gemini down")
-        mock_groq.return_value = {**MOCK_RECOGNITION_RESULT, "_ai_provider": "groq", "_ai_model": "llama-4-maverick"}
+        mock_groq.return_value = {**MOCK_RECOGNITION_RESULT, "_ai_provider": "groq", "_ai_model": "llama-3.2-90b-vision-preview"}
         result = await recognizer.analyze_food_image(b"fake", "image/jpeg")
 
     assert mock_gemini.call_count == 1
@@ -196,7 +196,7 @@ async def test_combined_groq_success():
             recognizer, "_combined_groq", new_callable=AsyncMock
         ) as mock_combined,
     ):
-        mock_combined.return_value = {**MOCK_COMBINED_RESULT, "_ai_provider": "groq", "_ai_model": "llama-4-maverick"}
+        mock_combined.return_value = {**MOCK_COMBINED_RESULT, "_ai_provider": "groq", "_ai_model": "llama-3.2-90b-vision-preview"}
         result = await recognizer.analyze_food_image_with_nutrition(b"fake", "image/jpeg")
 
     assert mock_combined.call_count == 1

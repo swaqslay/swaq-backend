@@ -136,6 +136,13 @@ def scan_not_found() -> NotFoundError:
     )
 
 
+def quick_snack_not_found() -> NotFoundError:
+    return NotFoundError(
+        "Quick snack not found. Check available snacks at GET /meals/quick-snacks.",
+        "QUICK_SNACK_NOT_FOUND",
+    )
+
+
 def premium_required() -> ForbiddenError:
     return ForbiddenError(
         "Free plan allows 3 scans/day. Upgrade to Premium for unlimited scans.",

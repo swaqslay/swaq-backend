@@ -13,6 +13,7 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
+        extra="ignore",
     )
 
     # ── App ───────────────────────────────────────────────────────────────────
@@ -44,7 +45,11 @@ class Settings(BaseSettings):
     gemini_api_key: str = ""
     openrouter_api_key: str = ""
     groq_api_key: str = ""
-    groq_model: str = "meta-llama/llama-4-maverick-17b-128e-instruct"
+    groq_model: str = "llama-3.2-90b-vision-preview"
+
+    # ── Google Cloud / Vertex AI ──────────────────────────────────────────────
+    google_cloud_project: str = "swaq-489621"
+    google_cloud_location: str = "us-central1"
 
     # ── Nutrition DB ──────────────────────────────────────────────────────────
     usda_api_key: str = ""

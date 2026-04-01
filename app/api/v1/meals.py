@@ -26,11 +26,15 @@ from app.schemas.meal import (
     MealHistoryResponse,
     MealItemUpdate,
     MealScanResponse,
+    QuickSnackInfo,
+    QuickSnackListResponse,
+    QuickSnackLogRequest,
+    TextMealLogRequest,
 )
 from app.services import meal_service
 from app.services.image_storage import upload_image
 from app.services.scan_processor import process_scan_inline
-from app.utils.constants import ALLOWED_IMAGE_TYPES, MAX_IMAGE_SIZE_BYTES
+from app.utils.constants import ALLOWED_IMAGE_TYPES, MAX_IMAGE_SIZE_BYTES, QUICK_SNACKS
 from app.utils.helpers import get_today_utc, parse_date
 
 logger = logging.getLogger(__name__)
@@ -101,6 +105,74 @@ async def get_scan_status(
             "scan_id": scan_id,
         }
     )
+
+
+@router.get("/quick-snacks", response_model=APIResponse[QuickSnackListResponse])
+async def list_quick_snacks() -> APIResponse[QuickSnackListResponse]:
+    """Return the catalog of available quick snack shortcuts."""
+    snacks = [
+        QuickSnackInfo(
+            id=snack_id,
+            name=data["name"],
+            emoji=data["emoji"],
+            default_portion=data["default_portion"],
+            calories=data["calories"],
+            category=data["category"],
+        )
+        for snack_id, data in QUICK_SNACKS.items()
+    ]
+    return APIResponse.ok(QuickSnackListResponse(snacks=snacks))
+
+
+@router.post("/log", response_model=APIResponse[MealScanResponse], status_code=201)
+async def log_meal_text(
+    data: TextMealLogRequest,
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+    redis=Depends(get_redis),
+) -> APIResponse[MealScanResponse]:
+    """
+    Log a meal via text input (no photo). Each food item goes through
+    the nutrition lookup pipeline for macro/micro estimation.
+    """
+    # Premium gate — text logging counts toward daily scan limit
+    if not current_user.is_premium:
+        today_count = await meal_service.count_today_scans(current_user.id, db)
+        if today_count >= settings.free_daily_scan_limit:
+            raise premium_required()
+
+    items = [item.model_dump() for item in data.items]
+    meal = await meal_service.create_meal_from_text(
+        user_id=current_user.id,
+        meal_type=data.meal_type,
+        items=items,
+        notes=data.notes,
+        db=db,
+        redis=redis,
+    )
+    response = meal_service.build_meal_scan_response(meal)
+    return APIResponse.ok(response)
+
+
+@router.post("/quick-log", response_model=APIResponse[MealScanResponse], status_code=201)
+async def log_quick_snack(
+    data: QuickSnackLogRequest,
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+) -> APIResponse[MealScanResponse]:
+    """
+    Log a quick snack shortcut. Uses pre-computed nutrition data —
+    no external API calls, no premium gate.
+    """
+    meal = await meal_service.create_meal_from_quick_snack(
+        user_id=current_user.id,
+        snack_id=data.snack_id,
+        quantity=data.quantity,
+        meal_type=data.meal_type,
+        db=db,
+    )
+    response = meal_service.build_meal_scan_response(meal)
+    return APIResponse.ok(response)
 
 
 @router.get("/history", response_model=APIResponse[MealHistoryResponse])

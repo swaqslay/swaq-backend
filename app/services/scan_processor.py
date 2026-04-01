@@ -64,7 +64,7 @@ async def process_scan_inline(
     try:
         # Step 1: AI recognition + nutrition (combined single call)
         recognizer = AIFoodRecognizer()
-        recognition = await recognizer.analyze_food_image_with_nutrition(image_bytes, content_type)
+        recognition = await recognizer.analyze_food_image_with_nutrition(image_bytes, content_type, notes=notes)
 
         raw_food_items = recognition.get("food_items", [])
         if not raw_food_items:

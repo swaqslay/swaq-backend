@@ -10,10 +10,17 @@ from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.core.exceptions import meal_not_found
+from app.core.exceptions import meal_not_found, quick_snack_not_found
 from app.models.meal import Meal, MealFoodItem
-from app.schemas.meal import MealDetailResponse, MealHistoryResponse, MealItemUpdate, MealSummary
+from app.schemas.meal import (
+    MealDetailResponse,
+    MealHistoryResponse,
+    MealItemUpdate,
+    MealScanResponse,
+    MealSummary,
+)
 from app.schemas.nutrition import FoodItemResponse, NutrientInfo
+from app.utils.constants import QUICK_SNACKS
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +33,12 @@ async def count_today_scans(user_id: uuid.UUID, db: AsyncSession) -> int:
 
     result = await db.execute(
         select(func.count(Meal.id)).where(
-            and_(Meal.user_id == user_id, Meal.created_at >= start, Meal.created_at < end)
+            and_(
+                Meal.user_id == user_id,
+                Meal.created_at >= start,
+                Meal.created_at < end,
+                Meal.ai_provider != "quick_snack",
+            )
         )
     )
     return result.scalar_one()
@@ -231,6 +243,242 @@ async def delete_meal(meal_id: uuid.UUID, user_id: uuid.UUID, db: AsyncSession) 
     await db.delete(meal)
     await db.flush()
     logger.info(f"Deleted meal {meal_id} for user {user_id}")
+
+
+async def create_meal_from_text(
+    user_id: uuid.UUID,
+    meal_type: str,
+    items: list[dict],
+    notes: str | None,
+    db: AsyncSession,
+    redis: object | None,
+) -> Meal:
+    """
+    Create a meal from user-provided text items.
+
+    Each item goes through the nutrition lookup pipeline (Redis -> DB -> USDA -> AI).
+
+    Args:
+        items: List of dicts with keys: name, portion (optional), estimated_weight_g.
+        redis: Redis client for cache lookups (optional).
+    """
+    from app.services.nutrition_lookup import NutritionLookup
+
+    nutrition_service = NutritionLookup()
+    try:
+        food_items_data: list[dict] = []
+        for item in items:
+            weight_g = item["estimated_weight_g"]
+            # Build a minimal AI estimate fallback (no nutrition known yet)
+            ai_fallback = {
+                "name": item["name"],
+                "calories": 0,
+                "protein_g": 0,
+                "carbs_g": 0,
+                "fat_g": 0,
+                "fiber_g": 0,
+                "vitamins": [],
+                "minerals": [],
+            }
+            nutrition = await nutrition_service.get_nutrition_with_cache(
+                food_name=item["name"],
+                weight_g=weight_g,
+                ai_estimate=ai_fallback,
+                redis=redis,
+                db=db,
+            )
+            food_items_data.append(
+                {
+                    "name": item["name"],
+                    "confidence": 1.0,
+                    "estimated_portion": item.get("portion", "1 serving"),
+                    "estimated_weight_g": weight_g,
+                    "calories": nutrition.get("calories", 0),
+                    "protein_g": nutrition.get("protein_g", 0),
+                    "carbs_g": nutrition.get("carbs_g", 0),
+                    "fat_g": nutrition.get("fat_g", 0),
+                    "fiber_g": nutrition.get("fiber_g", 0),
+                    "vitamins": nutrition.get("vitamins", {}),
+                    "minerals": nutrition.get("minerals", {}),
+                }
+            )
+
+        meal = await create_meal(
+            user_id=user_id,
+            meal_type=meal_type,
+            food_items_data=food_items_data,
+            ai_provider="text_input",
+            ai_model="user_reported",
+            image_url=None,
+            notes=notes,
+            db=db,
+        )
+        await db.commit()
+        await db.refresh(meal, attribute_names=["food_items"])
+        return meal
+    finally:
+        await nutrition_service.close()
+
+
+async def create_meal_from_quick_snack(
+    user_id: uuid.UUID,
+    snack_id: str,
+    quantity: int,
+    meal_type: str,
+    db: AsyncSession,
+) -> Meal:
+    """
+    Create a meal from a pre-defined quick snack shortcut.
+
+    No external API calls — uses in-memory QUICK_SNACKS data.
+
+    Args:
+        snack_id: Key in the QUICK_SNACKS dict.
+        quantity: Multiplier for nutrition values (1-10).
+
+    Raises:
+        NotFoundError: If snack_id is not in QUICK_SNACKS.
+    """
+    snack = QUICK_SNACKS.get(snack_id)
+    if not snack:
+        raise quick_snack_not_found()
+
+    food_items_data = [
+        {
+            "name": snack["name"],
+            "confidence": 1.0,
+            "estimated_portion": f"{quantity}x {snack['default_portion']}",
+            "estimated_weight_g": snack["estimated_weight_g"] * quantity,
+            "calories": snack["calories"] * quantity,
+            "protein_g": snack["protein_g"] * quantity,
+            "carbs_g": snack["carbs_g"] * quantity,
+            "fat_g": snack["fat_g"] * quantity,
+            "fiber_g": snack["fiber_g"] * quantity,
+            "vitamins": snack.get("vitamins", {}),
+            "minerals": snack.get("minerals", {}),
+        }
+    ]
+
+    meal = await create_meal(
+        user_id=user_id,
+        meal_type=meal_type,
+        food_items_data=food_items_data,
+        ai_provider="quick_snack",
+        ai_model="preset",
+        image_url=None,
+        notes=None,
+        db=db,
+    )
+    await db.commit()
+    await db.refresh(meal, attribute_names=["food_items"])
+    return meal
+
+
+def build_meal_scan_response(
+    meal: Meal,
+    recommendations: list[str] | None = None,
+) -> MealScanResponse:
+    """
+    Convert a Meal ORM object to a MealScanResponse schema.
+
+    Reusable across scan, text-log, and quick-log endpoints.
+    """
+    food_item_responses: list[FoodItemResponse] = []
+    all_vitamins: dict = {}
+    all_minerals: dict = {}
+
+    for item in meal.food_items:
+        vitamins = [
+            NutrientInfo(
+                name=k,
+                amount=v["amount"],
+                unit=v["unit"],
+                daily_value_percent=v.get("dv_percent"),
+            )
+            for k, v in (item.vitamins or {}).items()
+        ]
+        minerals = [
+            NutrientInfo(
+                name=k,
+                amount=v["amount"],
+                unit=v["unit"],
+                daily_value_percent=v.get("dv_percent"),
+            )
+            for k, v in (item.minerals or {}).items()
+        ]
+
+        food_item_responses.append(
+            FoodItemResponse(
+                id=str(item.id),
+                name=item.name,
+                confidence=item.confidence,
+                estimated_portion=item.estimated_portion,
+                estimated_weight_g=item.estimated_weight_g,
+                calories=item.calories,
+                protein_g=item.protein_g,
+                carbs_g=item.carbs_g,
+                fat_g=item.fat_g,
+                fiber_g=item.fiber_g,
+                vitamins=vitamins,
+                minerals=minerals,
+            )
+        )
+
+        for v in vitamins:
+            if v.name in all_vitamins:
+                all_vitamins[v.name]["amount"] += v.amount
+            else:
+                all_vitamins[v.name] = {
+                    "amount": v.amount,
+                    "unit": v.unit,
+                    "dvp": v.daily_value_percent or 0,
+                }
+        for m in minerals:
+            if m.name in all_minerals:
+                all_minerals[m.name]["amount"] += m.amount
+            else:
+                all_minerals[m.name] = {
+                    "amount": m.amount,
+                    "unit": m.unit,
+                    "dvp": m.daily_value_percent or 0,
+                }
+
+    vitamins_summary = [
+        NutrientInfo(
+            name=n,
+            amount=round(d["amount"], 1),
+            unit=d["unit"],
+            daily_value_percent=round(d["dvp"], 1),
+        )
+        for n, d in all_vitamins.items()
+    ]
+    minerals_summary = [
+        NutrientInfo(
+            name=n,
+            amount=round(d["amount"], 1),
+            unit=d["unit"],
+            daily_value_percent=round(d["dvp"], 1),
+        )
+        for n, d in all_minerals.items()
+    ]
+
+    return MealScanResponse(
+        meal_id=str(meal.id),
+        meal_type=meal.meal_type,
+        image_url=meal.image_url,
+        food_items=food_item_responses,
+        total_calories=meal.total_calories,
+        total_protein_g=meal.total_protein_g,
+        total_carbs_g=meal.total_carbs_g,
+        total_fat_g=meal.total_fat_g,
+        total_fiber_g=meal.total_fiber_g,
+        vitamins_summary=vitamins_summary,
+        minerals_summary=minerals_summary,
+        ai_provider=meal.ai_provider,
+        ai_model=meal.ai_model,
+        analyzed_at=datetime.now(timezone.utc),
+        recommendations=recommendations or [],
+    )
 
 
 def build_meal_detail_response(meal: Meal) -> MealDetailResponse:

@@ -93,3 +93,50 @@ class MealItemUpdate(BaseModel):
     carbs_g: float | None = Field(None, ge=0)
     fat_g: float | None = Field(None, ge=0)
     fiber_g: float | None = Field(None, ge=0)
+
+
+# ── Text-based meal logging schemas ──────────────────────────────────────────
+
+
+class TextMealItemInput(BaseModel):
+    """A single food item in a text-based meal log."""
+
+    name: str = Field(..., min_length=1, max_length=200)
+    portion: str | None = Field(None, max_length=100)
+    estimated_weight_g: float = Field(..., gt=0)
+
+
+class TextMealLogRequest(BaseModel):
+    """Request body for POST /meals/log (text-based logging)."""
+
+    meal_type: str = Field(..., pattern="^(breakfast|lunch|dinner|snack)$")
+    items: list[TextMealItemInput] = Field(..., min_length=1)
+    notes: str | None = None
+
+
+# ── Quick snack shortcut schemas ─────────────────────────────────────────────
+
+
+class QuickSnackLogRequest(BaseModel):
+    """Request body for POST /meals/quick-log."""
+
+    snack_id: str = Field(..., min_length=1)
+    quantity: int = Field(default=1, ge=1, le=10)
+    meal_type: str = Field(default="snack", pattern="^(breakfast|lunch|dinner|snack)$")
+
+
+class QuickSnackInfo(BaseModel):
+    """A single snack in the quick-snacks catalog."""
+
+    id: str
+    name: str
+    emoji: str
+    default_portion: str
+    calories: float
+    category: str
+
+
+class QuickSnackListResponse(BaseModel):
+    """Response for GET /meals/quick-snacks."""
+
+    snacks: list[QuickSnackInfo]
