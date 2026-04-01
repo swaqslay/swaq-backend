@@ -50,6 +50,7 @@ class Settings(BaseSettings):
     # ── Google Cloud / Vertex AI ──────────────────────────────────────────────
     google_cloud_project: str = "swaq-489621"
     google_cloud_location: str = "us-central1"
+    google_credentials_json: str = ""
 
     # ── Nutrition DB ──────────────────────────────────────────────────────────
     usda_api_key: str = ""

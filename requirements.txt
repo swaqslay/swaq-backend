@@ -5,6 +5,7 @@ python-multipart==0.0.20
 
 # AI & ML
 google-genai==1.14.0        # Gemini 2.0 Flash via Developer API
+google-cloud-aiplatform>=1.71.0 # Vertex AI SDK
 groq>=0.25.0                # Groq API (Llama 4 Maverick)
 httpx==0.28.1
 Pillow==11.1.0

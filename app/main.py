@@ -30,6 +30,17 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
+# ── Cloud Credentials Injection ───────────────────────────────────────────────
+# Vercel doesn't allow secret JSON file uploads, so we store the JSON in an env
+# var (.env), write it to a temporary file, and point Google SDKs to it.
+if settings.google_credentials_json:
+    import os
+    import tempfile
+    fd, path = tempfile.mkstemp(suffix=".json")
+    with os.fdopen(fd, 'w') as f:
+        f.write(settings.google_credentials_json)
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = path
+
 
 # ── Lifespan ──────────────────────────────────────────────────────────────────
 @asynccontextmanager
@@ -38,6 +49,7 @@ async def lifespan(app: FastAPI):
     logger.info(f"Starting {settings.app_name} [{settings.effective_app_env}]")
     logger.info(f"AI Provider  : {settings.ai_provider.upper()}")
     logger.info(f"Gemini API   : {'✓ configured' if settings.gemini_api_key else '✗ NOT SET'}")
+    logger.info(f"Vertex AI    : {'✓ configured' if settings.google_credentials_json else '✗ NOT SET'}")
     logger.info(f"Groq API     : {'✓ configured' if settings.groq_api_key else '✗ NOT SET'}")
     logger.info(f"OpenRouter   : {'✓ configured' if settings.openrouter_api_key else '✗ NOT SET'}")
     logger.info(f"USDA API     : {'✓ configured' if settings.usda_api_key else '✗ NOT SET'}")

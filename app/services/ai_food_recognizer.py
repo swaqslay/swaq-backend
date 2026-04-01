@@ -79,8 +79,10 @@ class AIFoodRecognizer:
 
     def __init__(self):
         self.gemini_api_key = settings.gemini_api_key
+        self.use_vertex = bool(settings.google_credentials_json)
         self.groq_api_key = settings.groq_api_key
-        self.groq_model = settings.groq_model
+        # Default fallback if unset
+        self.groq_model = settings.groq_model if "preview" not in settings.groq_model else "llama-3.2-11b-vision-preview"
         self.ai_provider = settings.ai_provider.lower()
 
         self._gemini_client: genai.Client | None = None
@@ -91,7 +93,14 @@ class AIFoodRecognizer:
     def _get_gemini_client(self) -> genai.Client:
         """Lazy-init the genai Client (reused across calls)."""
         if self._gemini_client is None:
-            self._gemini_client = genai.Client(api_key=self.gemini_api_key)
+            if self.use_vertex:
+                self._gemini_client = genai.Client(
+                    vertexai=True,
+                    project=settings.google_cloud_project,
+                    location=settings.google_cloud_location,
+                )
+            else:
+                self._gemini_client = genai.Client(api_key=self.gemini_api_key)
         return self._gemini_client
 
     def _get_groq_client(self) -> AsyncGroq:
@@ -117,7 +126,7 @@ class AIFoodRecognizer:
 
     def _has_provider_key(self, provider: str) -> bool:
         if provider == "gemini":
-            return bool(self.gemini_api_key)
+            return bool(self.gemini_api_key) or self.use_vertex
         if provider == "groq":
             return bool(self.groq_api_key)
         return False
@@ -273,8 +282,8 @@ class AIFoodRecognizer:
 
     async def _analyze_with_gemini(self, image_bytes: bytes, mime_type: str, notes: str | None = None) -> dict | None:
         """Call Gemini vision API for food recognition."""
-        if not self.gemini_api_key:
-            logger.debug("GEMINI_API_KEY not set, skipping Gemini")
+        if not self.gemini_api_key and not self.use_vertex:
+            logger.debug("GEMINI_API_KEY and Vertex credentials not set, skipping Gemini")
             return None
 
         client = self._get_gemini_client()
@@ -297,7 +306,7 @@ class AIFoodRecognizer:
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
                     temperature=0.15,
-                    max_output_tokens=1024,
+                    max_output_tokens=8192,
                 ),
             )
             text = response.text
@@ -314,7 +323,7 @@ class AIFoodRecognizer:
 
     async def _text_query_gemini(self, prompt: str) -> dict | None:
         """Text-only Gemini call for nutrition estimation."""
-        if not self.gemini_api_key:
+        if not self.gemini_api_key and not self.use_vertex:
             return None
 
         client = self._get_gemini_client()
@@ -341,8 +350,8 @@ class AIFoodRecognizer:
 
     async def _combined_gemini(self, image_bytes: bytes, mime_type: str, notes: str | None = None) -> dict | None:
         """Single Gemini call for recognition + nutrition."""
-        if not self.gemini_api_key:
-            logger.debug("GEMINI_API_KEY not set, skipping Gemini combined")
+        if not self.gemini_api_key and not self.use_vertex:
+            logger.debug("GEMINI_API_KEY and Vertex credentials not set, skipping Gemini combined")
             return None
 
         client = self._get_gemini_client()
@@ -361,7 +370,7 @@ class AIFoodRecognizer:
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
                     temperature=0.15,
-                    max_output_tokens=1000,
+                    max_output_tokens=8192,
                 ),
             )
             text = response.text
@@ -410,7 +419,7 @@ class AIFoodRecognizer:
                     }
                 ],
                 temperature=0.15,
-                max_completion_tokens=1024,
+                max_completion_tokens=8192,
                 response_format={"type": "json_object"},
             )
             text = response.choices[0].message.content
@@ -477,7 +486,7 @@ class AIFoodRecognizer:
                     }
                 ],
                 temperature=0.15,
-                max_completion_tokens=1000,
+                max_completion_tokens=8192,
                 response_format={"type": "json_object"},
             )
             text = response.choices[0].message.content
